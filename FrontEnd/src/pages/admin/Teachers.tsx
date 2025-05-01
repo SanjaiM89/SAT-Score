@@ -1,56 +1,70 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Users, UserPlus, Search, Edit2, Trash2, Plus } from 'lucide-react';
 import { AddTeacherModal } from '../../components/modals/AddTeacherModal';
 import { AssignTeachers } from './AssignTeachers';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 
 interface Teacher {
   id: string;
-  name: string;
   teacherId: string;
+  fullName: string;
   department: string;
   designation: string;
-  subjectsHandled: string[];
+  subjectsHandled: { id: string; code: string; name: string; batch: string; section: string }[];
   email: string;
 }
 
-const subjectMap: Record<string, string> = {
-  data_structures: 'Data Structures (CS201)',
-  algorithms: 'Algorithms (CS202)',
-  database_systems: 'Database Systems (CS203)',
-  operating_systems: 'Operating Systems (CS204)',
-  computer_networks: 'Computer Networks (CS205)',
-  web_technologies: 'Web Technologies (CS206)',
-  artificial_intelligence: 'Artificial Intelligence (CS207)',
-  machine_learning: 'Machine Learning (CS208)',
-};
+interface Department {
+  id: string;
+  shortName: string;
+  name: string;
+}
 
 export const Teachers = () => {
   const [activeTab, setActiveTab] = useState<'list' | 'add' | 'assign'>('list');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const handleAddTeacher = (teacherData: any) => {
-    const currentYear = '2025';
-    const sequence = (teachers.length + 1).toString().padStart(4, '0');
-    const teacherId = `${currentYear}T${sequence}`;
-
-    const newTeacher: Teacher = {
-      id: Date.now().toString(),
-      name: teacherData.fullName,
-      teacherId,
-      department: teacherData.department,
-      designation: teacherData.designation,
-      subjectsHandled: teacherData.subjectsHandled,
-      email: teacherData.email,
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [teachersRes, deptsRes] = await Promise.all([
+          axios.get('http://localhost:8000/api/teachers'),
+          axios.get('http://localhost:8000/api/departments')
+        ]);
+        setTeachers(teachersRes.data);
+        setDepartments(deptsRes.data);
+        setLoading(false);
+      } catch (error) {
+        toast.error('Failed to fetch data');
+        setLoading(false);
+      }
     };
+    fetchData();
+  }, []);
 
-    setTeachers(prev => [...prev, newTeacher]);
-    setIsModalOpen(false);
-    toast.success('Teacher added successfully!');
+  const handleAddTeacher = async (teacherData: any) => {
+    try {
+      if (editingTeacher) {
+        const response = await axios.put(`http://localhost:8000/api/teachers/${editingTeacher.id}`, teacherData);
+        setTeachers(prev => prev.map(t => (t.id === editingTeacher.id ? response.data : t)));
+        toast.success('Teacher updated successfully!');
+      } else {
+        const response = await axios.post('http://localhost:8000/api/teachers', teacherData);
+        setTeachers(prev => [...prev, response.data]);
+        toast.success('Teacher added successfully!');
+      }
+      setIsModalOpen(false);
+      setEditingTeacher(null);
+    } catch (error) {
+      toast.error('Failed to save teacher');
+    }
   };
 
   const handleEditTeacher = (teacher: Teacher) => {
@@ -58,18 +72,25 @@ export const Teachers = () => {
     setIsModalOpen(true);
   };
 
-  const handleDeleteTeacher = (teacherId: string) => {
-    setTeachers(prev => prev.filter(teacher => teacher.id !== teacherId));
-    toast.success('Teacher removed successfully!');
+  const handleDeleteTeacher = async (teacherId: string) => {
+    try {
+      await axios.delete(`http://localhost:8000/api/teachers/${teacherId}`);
+      setTeachers(prev => prev.filter(teacher => teacher.id !== teacherId));
+      toast.success('Teacher removed successfully!');
+    } catch (error) {
+      toast.error('Failed to delete teacher');
+    }
   };
 
   const filteredTeachers = teachers.filter(teacher => {
     const matchesSearch = 
-      teacher.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      teacher.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       teacher.teacherId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesDepartment = !selectedDepartment || teacher.department === selectedDepartment;
     return matchesSearch && matchesDepartment;
   });
+
+  if (loading) return <div>Loading...</div>;
 
   return (
     <div className="space-y-8">
@@ -139,10 +160,9 @@ export const Teachers = () => {
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="">All Departments</option>
-                  <option value="Computer Science">Computer Science</option>
-                  <option value="Electronics">Electronics</option>
-                  <option value="Mechanical">Mechanical</option>
-                  <option value="Civil">Civil</option>
+                  {departments.map(dept => (
+                    <option key={dept.id} value={dept.shortName}>{dept.name}</option>
+                  ))}
                 </select>
               </div>
 
@@ -162,8 +182,10 @@ export const Teachers = () => {
                     {filteredTeachers.map((teacher) => (
                       <tr key={teacher.id}>
                         <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.teacherId}</td>
-                        <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.name}</td>
-                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{teacher.department}</td>
+                        <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.fullName}</td>
+                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
+                          {departments.find(d => d.shortName === teacher.department)?.name || teacher.department}
+                        </td>
                         <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
                           <span className="capitalize">{teacher.designation.replace('_', ' ')}</span>
                         </td>
@@ -171,10 +193,10 @@ export const Teachers = () => {
                           <div className="flex flex-wrap gap-2">
                             {teacher.subjectsHandled.map((subject) => (
                               <span
-                                key={subject}
+                                key={subject.id}
                                 className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300 rounded-full"
                               >
-                                {subjectMap[subject] || subject}
+                                {subject.name} ({subject.code})
                               </span>
                             ))}
                           </div>
@@ -214,6 +236,7 @@ export const Teachers = () => {
           setEditingTeacher(null);
         }}
         onSubmit={handleAddTeacher}
+        editingTeacher={editingTeacher}
       />
     </div>
   );

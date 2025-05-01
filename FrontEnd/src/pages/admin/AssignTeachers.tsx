@@ -1,90 +1,100 @@
-import React, { useState } from 'react';
-import { UserPlus, Search, X, Edit2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { UserPlus, Search, X } from 'lucide-react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 import { AssignTeacherModal } from '../../components/modals/AssignTeacherModal';
 
-interface TeacherAssignment {
+interface Teacher {
   id: string;
   teacherId: string;
-  teacherName: string;
+  fullName: string;
   department: string;
-  subjects: {
-    id: string;
-    name: string;
-    code: string;
-    batch: string;
-    section: string;
-  }[];
+  subjectsHandled: { id: string; code: string; name: string; batch: string; section: string }[];
 }
 
-const mockAssignments: TeacherAssignment[] = [
-  {
-    id: '1',
-    teacherId: '2025T0001',
-    teacherName: 'Dr. Sarah Wilson',
-    department: 'Computer Science',
-    subjects: [
-      { id: '1', name: 'Data Structures', code: 'CS201', batch: '2025', section: 'A' },
-      { id: '2', name: 'Algorithms', code: 'CS202', batch: '2025', section: 'B' },
-    ],
-  },
-  {
-    id: '2',
-    teacherId: '2025T0002',
-    teacherName: 'Prof. John Smith',
-    department: 'Electronics',
-    subjects: [
-      { id: '3', name: 'Digital Electronics', code: 'EC201', batch: '2025', section: 'A' },
-      { id: '4', name: 'Microprocessors', code: 'EC202', batch: '2025', section: 'A' },
-    ],
-  },
-];
+interface Department {
+  id: string;
+  shortName: string;
+  name: string;
+}
+
+interface Subject {
+  id: string;
+  code: string;
+  name: string;
+}
 
 export const AssignTeachers = () => {
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedTeacher, setSelectedTeacher] = useState<string | null>(null);
-  const [assignments, setAssignments] = useState<TeacherAssignment[]>(mockAssignments);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
-  const [editingAssignment, setEditingAssignment] = useState<{
-    teacherId: string;
-    subjectId: string;
-  } | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const handleAssignTeacher = (assignmentData: any) => {
-    console.log('Assignment data:', assignmentData);
-    // TODO: Implement the API call to assign the teacher
-    setIsModalOpen(false);
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [teachersRes, deptsRes, subjectsRes] = await Promise.all([
+          axios.get('http://localhost:8000/api/teachers'),
+          axios.get('http://localhost:8000/api/departments'),
+          axios.get('http://localhost:8000/api/subjects'),
+        ]);
+        setTeachers(teachersRes.data);
+        setDepartments(deptsRes.data);
+        setSubjects(subjectsRes.data);
+        setLoading(false);
+      } catch (error) {
+        toast.error('Failed to fetch data');
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  const handleAssignTeacher = async (assignmentData: any) => {
+    try {
+      const response = await axios.post('http://localhost:8000/api/teachers/assign', assignmentData);
+      setTeachers(prev =>
+        prev.map(teacher =>
+          teacher.id === assignmentData.teacherId ? response.data : teacher
+        )
+      );
+      toast.success('Teacher assigned successfully!');
+      setIsModalOpen(false);
+      setSelectedTeacherId(null);
+    } catch (error) {
+      toast.error('Failed to assign teacher');
+    }
   };
 
-  const handleUnassignSubject = (teacherId: string, subjectId: string) => {
-    setAssignments(prev =>
-      prev.map(assignment => {
-        if (assignment.teacherId === teacherId) {
-          return {
-            ...assignment,
-            subjects: assignment.subjects.filter(subject => subject.id !== subjectId),
-          };
-        }
-        return assignment;
-      })
-    );
+  const handleUnassignSubject = async (teacherId: string, subjectCode: string) => {
+    try {
+      const response = await axios.delete(`http://localhost:8000/api/teachers/${teacherId}/subjects/${subjectCode}`);
+      setTeachers(prev =>
+        prev.map(teacher =>
+          teacher.id === teacherId ? response.data : teacher
+        )
+      );
+      toast.success('Subject unassigned successfully!');
+    } catch (error) {
+      toast.error('Failed to unassign subject');
+    }
   };
 
-  const handleReassignTeacher = (teacherId: string, subjectId: string) => {
-    setEditingAssignment({ teacherId, subjectId });
-    setIsEditing(true);
-    setIsModalOpen(true);
-  };
-
-  const filteredAssignments = assignments.filter(assignment => {
-    const matchesSearch = assignment.teacherName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      assignment.teacherId.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesDepartment = !selectedDepartment || assignment.department === selectedDepartment;
-    const matchesSubject = !selectedSubject || assignment.subjects.some(s => s.code === selectedSubject);
+  const filteredTeachers = teachers.filter(teacher => {
+    const matchesSearch =
+      teacher.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      teacher.teacherId.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesDepartment = !selectedDepartment || teacher.department === selectedDepartment;
+    const matchesSubject = !selectedSubject || teacher.subjectsHandled.some(s => s.code === selectedSubject);
     return matchesSearch && matchesDepartment && matchesSubject;
   });
+
+  if (loading) return <div>Loading...</div>;
 
   return (
     <div className="space-y-8">
@@ -105,10 +115,11 @@ export const AssignTeachers = () => {
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
             >
               <option value="">All Departments</option>
-              <option value="Computer Science">Computer Science</option>
-              <option value="Electronics">Electronics</option>
-              <option value="Mechanical">Mechanical</option>
-              <option value="Civil">Civil</option>
+              {departments.map(dept => (
+                <option key={dept.id} value={dept.shortName}>
+                  {dept.name}
+                </option>
+              ))}
             </select>
           </div>
           <div>
@@ -121,10 +132,11 @@ export const AssignTeachers = () => {
               className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
             >
               <option value="">All Subjects</option>
-              <option value="CS201">Data Structures</option>
-              <option value="CS202">Algorithms</option>
-              <option value="EC201">Digital Electronics</option>
-              <option value="EC202">Microprocessors</option>
+              {subjects.map(subject => (
+                <option key={subject.id} value={subject.code}>
+                  {subject.name} ({subject.code})
+                </option>
+              ))}
             </select>
           </div>
           <div>
@@ -156,52 +168,44 @@ export const AssignTeachers = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-              {filteredAssignments.map((assignment) => (
-                <tr key={assignment.id}>
-                  <td className="py-4 text-sm text-gray-900 dark:text-white">{assignment.teacherId}</td>
-                  <td className="py-4 text-sm text-gray-900 dark:text-white">{assignment.teacherName}</td>
-                  <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{assignment.department}</td>
+              {filteredTeachers.map(teacher => (
+                <tr key={teacher.id}>
+                  <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.teacherId}</td>
+                  <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.fullName}</td>
+                  <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
+                    {departments.find(d => d.shortName === teacher.department)?.name || teacher.department}
+                  </td>
                   <td className="py-4">
-                    <div className="space-y-2">
-                      {assignment.subjects.map((subject) => (
-                        <div
-                          key={subject.id}
-                          className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 p-2 rounded-lg"
-                        >
-                          <div>
-                            <span className="text-sm font-medium text-gray-900 dark:text-white">
-                              {subject.name}
+                    <div className="flex flex-wrap gap-2">
+                      {teacher.subjectsHandled.length === 0 ? (
+                        <span className="text-gray-500 dark:text-gray-400">No subjects assigned</span>
+                      ) : (
+                        teacher.subjectsHandled.map(subject => (
+                          <div
+                            key={subject.id}
+                            className="flex items-center px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300 rounded-full"
+                          >
+                            <span>
+                              {subject.name} ({subject.code}) - {subject.batch}/{subject.section}
                             </span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                              ({subject.code}) - Batch {subject.batch}, Section {subject.section}
-                            </span>
-                          </div>
-                          <div className="flex items-center space-x-2">
                             <button
-                              onClick={() => handleReassignTeacher(assignment.teacherId, subject.id)}
-                              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                              onClick={() => handleUnassignSubject(teacher.id, subject.code)}
+                              className="ml-2 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
                             >
-                              <Edit2 size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleUnassignSubject(assignment.teacherId, subject.id)}
-                              className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                            >
-                              <X size={16} />
+                              <X size={14} />
                             </button>
                           </div>
-                        </div>
-                      ))}
+                        ))
+                      )}
                     </div>
                   </td>
                   <td className="py-4">
                     <button
                       onClick={() => {
-                        setSelectedTeacher(assignment.teacherId);
-                        setIsEditing(false);
+                        setSelectedTeacherId(teacher.id);
                         setIsModalOpen(true);
                       }}
-                      className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                      className="flex items-center gap-1 px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
                     >
                       <UserPlus size={16} />
                       Assign New
@@ -218,10 +222,10 @@ export const AssignTeachers = () => {
         isOpen={isModalOpen}
         onClose={() => {
           setIsModalOpen(false);
-          setIsEditing(false);
-          setEditingAssignment(null);
+          setSelectedTeacherId(null);
         }}
         onSubmit={handleAssignTeacher}
+        teacherId={selectedTeacherId || ''}
       />
     </div>
   );

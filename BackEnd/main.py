@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from admin.Student import router as student_router
 from admin.DepartmentsAndSubjects import router as department_router
+from admin.Teachers import router as teacher_router
 from database import Database
 import logging
 import uvicorn
@@ -63,6 +64,11 @@ try:
     logger.info("Department router included successfully")
 except Exception as e:
     logger.error(f"Failed to include department_router: {str(e)}")
+try:
+    app.include_router(teacher_router, prefix="/api")
+    logger.info("Teacher router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include teacher_router: {str(e)}")
 
 @app.get("/")
 async def root():
