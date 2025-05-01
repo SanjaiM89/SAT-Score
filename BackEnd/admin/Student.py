@@ -1,7 +1,8 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from typing import List, Optional
 from AddStudentModel import AddStudentModel, StudentDB
-from dependencies import get_student_db
+from database import DepartmentDB
+from dependencies import get_student_db, get_department_db
 import logging
 
 # Set up logging
@@ -10,12 +11,20 @@ logger = logging.getLogger(__name__)
 
 student_router = APIRouter()
 
-async def generate_registration_number(db: StudentDB, department: str, students_count: int) -> str:
-    dept_short_name = department.split(' ')[0]
-    current_year = "2025"
-    department_code = dept_short_name[:2].upper()
+async def generate_registration_number(db: StudentDB, department_db: DepartmentDB, department: str, year_of_joining: int) -> str:
+    # Fetch department to get shortName
+    dept = await department_db.collection.find_one({'name': department})
+    if not dept:
+        raise HTTPException(status_code=400, detail=f"Department {department} not found")
+    
+    short_name = dept['shortName']
+    if not short_name or len(short_name) != 2:
+        raise HTTPException(status_code=400, detail=f"Invalid shortName for department {department}")
+
+    # Count students in the department
+    students_count = await db.collection.count_documents({'department': department})
     sequence = str(students_count + 1).zfill(4)
-    return f"{current_year}{department_code}{sequence}"
+    return f"{year_of_joining}{short_name}{sequence}"
 
 @student_router.post("/students", response_model=dict)
 async def create_student(
@@ -41,8 +50,10 @@ async def create_student(
     bloodGroup: str = Form(...),
     emergencyContact: str = Form(...),
     remarks: Optional[str] = Form(None),
+    yearOfJoining: int = Form(...),
     profilePicture: UploadFile = File(None),
-    student_db: StudentDB = Depends(get_student_db)
+    student_db: StudentDB = Depends(get_student_db),
+    department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
         # Create student data dictionary
@@ -68,7 +79,8 @@ async def create_student(
             "hostelStudent": hostelStudent,
             "bloodGroup": bloodGroup,
             "emergencyContact": emergencyContact,
-            "remarks": remarks
+            "remarks": remarks,
+            "yearOfJoining": yearOfJoining
         }
         logger.info(f"Received student data: {student_data}")
         
@@ -79,8 +91,7 @@ async def create_student(
         file_content = await profilePicture.read() if profilePicture else None
         
         # Generate registration number
-        students_count = await student_db.collection.count_documents({})
-        registration_number = await generate_registration_number(student_db, student.department, students_count)
+        registration_number = await generate_registration_number(student_db, department_db, student.department, student.yearOfJoining)
         
         # Create student in database
         result = await student_db.create_student(student, file_content, registration_number)

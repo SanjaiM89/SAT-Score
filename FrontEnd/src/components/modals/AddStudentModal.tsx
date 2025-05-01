@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Upload, UserPlus } from 'lucide-react';
 import axios from 'axios';
 
@@ -32,13 +32,30 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     bloodGroup: '',
     emergencyContact: '',
     remarks: '',
+    yearOfJoining: '',
   });
   const [profilePicture, setProfilePicture] = useState<File | null>(null);
+  const [departments, setDepartments] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Debug: Log the backend URL to verify
-  console.log('Backend URL:', import.meta.env.VITE_BACKEND_URL);
+  // Fetch departments on mount
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      try {
+        const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/api/departments`);
+        const deptNames = response.data
+          .filter((dept: any) => dept && dept.name)
+          .map((dept: any) => dept.name);
+        setDepartments(deptNames);
+        console.log('Fetched departments for dropdown:', deptNames);
+      } catch (err) {
+        console.error('Error fetching departments:', err);
+        setError('Failed to load departments');
+      }
+    };
+    fetchDepartments();
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
@@ -61,16 +78,16 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     try {
       const data = new FormData();
       Object.entries(formData).forEach(([key, value]) => {
-        // Convert booleans to "true"/"false" strings for backend
         data.append(key, typeof value === 'boolean' ? value.toString() : value);
       });
       if (profilePicture) {
         data.append('profilePicture', profilePicture);
       }
 
-      console.log('Sending data:', Object.fromEntries(data)); // Debug: Log the data being sent
+      console.log('Sending student data:', Object.fromEntries(data));
       const response = await axios.post(`${import.meta.env.VITE_BACKEND_URL}/api/students`, data);
-      onSubmit(formData);
+      console.log('Student creation response:', response.data);
+      onSubmit({ ...formData, id: response.data.id });
       setFormData({
         fullName: '',
         dateOfBirth: '',
@@ -94,11 +111,12 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
         bloodGroup: '',
         emergencyContact: '',
         remarks: '',
+        yearOfJoining: '',
       });
       setProfilePicture(null);
       onClose();
     } catch (err: any) {
-      console.error('API Error (Raw):', JSON.stringify(err.response?.data, null, 2)); // Debug: Log the full raw error
+      console.error('API Error (Raw):', JSON.stringify(err.response?.data, null, 2));
       const errorDetail = err.response?.data?.detail;
       let errorMessage = 'Failed to add student';
       if (Array.isArray(errorDetail)) {
@@ -107,13 +125,17 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
         errorMessage = errorDetail;
       }
       setError(errorMessage);
-      console.error('Processed Error Message:', errorMessage); // Debug: Log the processed error message
+      console.error('Processed Error Message:', errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
   if (!isOpen) return null;
+
+  // Generate years from 2000 to current year
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 2000 + 1 }, (_, i) => (2000 + i).toString()).reverse();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -306,10 +328,9 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="">Select Department</option>
-                  <option value="Computer Science">Computer Science & Engineering</option>
-                  <option value="Electronics">Electronics & Communication</option>
-                  <option value="Mechanical">Mechanical Engineering</option>
-                  <option value="Civil">Civil Engineering</option>
+                  {departments.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -328,6 +349,23 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
                   <option value="BTECH">B.Tech</option>
                   <option value="ME">M.E</option>
                   <option value="MTECH">M.Tech</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Year of Joining
+                </label>
+                <select
+                  name="yearOfJoining"
+                  value={formData.yearOfJoining}
+                  onChange={handleChange}
+                  required
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="">Select Year</option>
+                  {years.map(year => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
                 </select>
               </div>
               <div>
