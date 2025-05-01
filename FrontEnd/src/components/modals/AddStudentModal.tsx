@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Upload, UserPlus } from 'lucide-react';
+import axios from 'axios';
 
 interface AddStudentModalProps {
   isOpen: boolean;
@@ -9,7 +10,6 @@ interface AddStudentModalProps {
 
 export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClose, onSubmit }) => {
   const [formData, setFormData] = useState({
-    // Personal Information
     fullName: '',
     dateOfBirth: '',
     gender: '',
@@ -21,23 +21,24 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     city: '',
     state: '',
     postalCode: '',
-
-    // Academic Details
     department: '',
     program: '',
     yearOfStudy: '',
     semester: '',
     section: '',
-
-    // Additional Information
     admissionType: '',
     scholarshipStatus: false,
     hostelStudent: false,
     bloodGroup: '',
     emergencyContact: '',
-    profilePicture: '',
     remarks: '',
   });
+  const [profilePicture, setProfilePicture] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Debug: Log the backend URL to verify
+  console.log('Backend URL:', import.meta.env.VITE_BACKEND_URL);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
@@ -47,9 +48,69 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setProfilePicture(file);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = new FormData();
+      Object.entries(formData).forEach(([key, value]) => {
+        // Convert booleans to "true"/"false" strings for backend
+        data.append(key, typeof value === 'boolean' ? value.toString() : value);
+      });
+      if (profilePicture) {
+        data.append('profilePicture', profilePicture);
+      }
+
+      console.log('Sending data:', Object.fromEntries(data)); // Debug: Log the data being sent
+      const response = await axios.post(`${import.meta.env.VITE_BACKEND_URL}/api/students`, data);
+      onSubmit(formData);
+      setFormData({
+        fullName: '',
+        dateOfBirth: '',
+        gender: '',
+        phoneNumber: '',
+        email: '',
+        parentName: '',
+        parentContact: '',
+        address: '',
+        city: '',
+        state: '',
+        postalCode: '',
+        department: '',
+        program: '',
+        yearOfStudy: '',
+        semester: '',
+        section: '',
+        admissionType: '',
+        scholarshipStatus: false,
+        hostelStudent: false,
+        bloodGroup: '',
+        emergencyContact: '',
+        remarks: '',
+      });
+      setProfilePicture(null);
+      onClose();
+    } catch (err: any) {
+      console.error('API Error (Raw):', JSON.stringify(err.response?.data, null, 2)); // Debug: Log the full raw error
+      const errorDetail = err.response?.data?.detail;
+      let errorMessage = 'Failed to add student';
+      if (Array.isArray(errorDetail)) {
+        errorMessage = errorDetail.map((err: any) => `${err.loc.join('.')} ${err.msg}`).join('; ');
+      } else if (typeof errorDetail === 'string') {
+        errorMessage = errorDetail;
+      }
+      setError(errorMessage);
+      console.error('Processed Error Message:', errorMessage); // Debug: Log the processed error message
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -70,6 +131,11 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-8">
+          {error && (
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+              <span>{error}</span>
+            </div>
+          )}
           {/* Personal Information */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Personal Information</h3>
@@ -408,11 +474,10 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
                 </label>
                 <div className="flex items-center space-x-2">
                   <input
-                    type="text"
+                    type="file"
                     name="profilePicture"
-                    value={formData.profilePicture}
-                    onChange={handleChange}
-                    placeholder="Enter image URL"
+                    accept="image/*"
+                    onChange={handleFileChange}
                     className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                   />
                   <button
@@ -443,15 +508,23 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
               type="button"
               onClick={onClose}
               className="px-6 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              disabled={loading}
             >
               Cancel
             </button>
             <button
               type="submit"
               className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 flex items-center space-x-2"
+              disabled={loading}
             >
-              <UserPlus size={20} />
-              <span>Add Student</span>
+              {loading ? (
+                <span>Adding...</span>
+              ) : (
+                <>
+                  <UserPlus size={20} />
+                  <span>Add Student</span>
+                </>
+              )}
             </button>
           </div>
         </form>

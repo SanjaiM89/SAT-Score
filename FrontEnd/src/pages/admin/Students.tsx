@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { GraduationCap, UserPlus, Search, Bell, Plus, BookOpen } from 'lucide-react';
 import { AddStudentModal } from '../../components/modals/AddStudentModal';
 import toast from 'react-hot-toast';
@@ -30,61 +30,101 @@ export const Students = () => {
   const [activeTab, setActiveTab] = useState<'list' | 'announcements' | 'courses'>('list');
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
   const [isAnnouncementModalOpen, setIsAnnouncementModalOpen] = useState(false);
-  const [students, setStudents] = useState<Student[]>([
-    {
-      id: '1',
-      name: 'Alice Johnson',
-      registrationNumber: '2025CS0001',
-      department: 'Computer Science',
-      program: 'B.Tech',
-      yearOfStudy: '2',
-      email: 'alice@example.com',
-      courses: [
-        { id: '1', code: 'CS201', name: 'Data Structures' },
-        { id: '2', code: 'CS202', name: 'Database Systems' }
-      ]
-    },
-    {
-      id: '2',
-      name: 'Bob Smith',
-      registrationNumber: '2025CS0002',
-      department: 'Computer Science',
-      program: 'B.Tech',
-      yearOfStudy: '2',
-      email: 'bob@example.com',
-      courses: [
-        { id: '1', code: 'CS201', name: 'Data Structures' },
-        { id: '3', code: 'CS203', name: 'Computer Networks' }
-      ]
-    }
-  ]);
+  const [students, setStudents] = useState<Student[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleAddStudent = (studentData: any) => {
-    const deptShortName = studentData.department.split(' ')[0];
-    const currentYear = '2025';
-    const departmentCode = deptShortName.substring(0, 2).toUpperCase();
-    const sequence = (students.length + 1).toString().padStart(4, '0');
-    const registrationNumber = `${currentYear}${departmentCode}${sequence}`;
-
-    const newStudent: Student = {
-      id: Date.now().toString(),
-      name: studentData.fullName,
-      registrationNumber,
-      department: studentData.department,
-      program: studentData.program,
-      yearOfStudy: studentData.yearOfStudy,
-      email: studentData.email,
-      courses: []
+  // Fetch students from backend on mount
+  useEffect(() => {
+    const fetchStudents = async () => {
+      setIsLoading(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/students`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        const formattedStudents: Student[] = data.map((student: any) => ({
+          id: student.id,
+          name: student.fullName,
+          registrationNumber: student.registrationNumber,
+          department: student.department,
+          program: student.program,
+          yearOfStudy: student.yearOfStudy,
+          email: student.email,
+          courses: student.courses || [],
+        }));
+        setStudents(formattedStudents);
+        console.log('Fetched students:', formattedStudents);
+      } catch (error) {
+        console.error('Error fetching students:', error);
+        toast.error('Failed to fetch students');
+      } finally {
+        setIsLoading(false);
+      }
     };
 
-    setStudents(prev => [...prev, newStudent]);
-    setIsStudentModalOpen(false);
-    toast.success('Student added successfully!');
+    fetchStudents();
+  }, []);
+
+  const handleAddStudent = async (studentData: any) => {
+    try {
+      const formData = new FormData();
+      Object.entries(studentData).forEach(([key, value]) => {
+        if (key === 'profilePicture' && value) {
+          formData.append(key, value);
+        } else if (value !== null && value !== undefined) {
+          formData.append(key, value as string);
+        }
+      });
+
+      console.log('Sending student data to backend:', studentData);
+
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/students`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(JSON.stringify(errorData));
+      }
+
+      const newStudent = await response.json();
+      const formattedStudent: Student = {
+        id: newStudent.id,
+        name: newStudent.fullName,
+        registrationNumber: newStudent.registrationNumber,
+        department: newStudent.department,
+        program: newStudent.program,
+        yearOfStudy: newStudent.yearOfStudy,
+        email: newStudent.email,
+        courses: newStudent.courses || [],
+      };
+
+      setStudents(prev => [...prev, formattedStudent]);
+      setIsStudentModalOpen(false);
+      toast.success('Student added successfully!');
+    } catch (error: any) {
+      console.error('Error adding student:', error);
+      let errorMessage = 'Failed to add student';
+      try {
+        const parsedError = JSON.parse(error.message);
+        errorMessage = parsedError.detail.map((err: any) => `${err.loc.join('.')}: ${err.msg}`).join('; ');
+      } catch (e) {
+        // If parsing fails, use the raw error message
+      }
+      toast.error(errorMessage);
+    }
   };
 
   const handleViewCourses = (studentId: string) => {
@@ -205,45 +245,51 @@ export const Students = () => {
                 </select>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="text-left border-b border-gray-200 dark:border-gray-700">
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Reg. No</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Name</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Department</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Program</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Year</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Courses</th>
-                      <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {filteredStudents.map((student) => (
-                      <tr key={student.id}>
-                        <td className="py-4 text-sm text-gray-900 dark:text-white">{student.registrationNumber}</td>
-                        <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
-                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
-                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.program}</td>
-                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.yearOfStudy}nd Year</td>
-                        <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
-                          <button
-                            onClick={() => handleViewCourses(student.id)}
-                            className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
-                          >
-                            View ({student.courses.length})
-                          </button>
-                        </td>
-                        <td className="py-4">
-                          <button className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
-                            Edit
-                          </button>
-                        </td>
+              {isLoading ? (
+                <div className="text-center text-gray-600 dark:text-gray-400">Loading students...</div>
+              ) : filteredStudents.length === 0 ? (
+                <div className="text-center text-gray-600 dark:text-gray-400">No students found</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left border-b border-gray-200 dark:border-gray-700">
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Reg. No</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Name</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Department</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Program</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Year</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Courses</th>
+                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {filteredStudents.map((student) => (
+                        <tr key={student.id}>
+                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.registrationNumber}</td>
+                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
+                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
+                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.program}</td>
+                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.yearOfStudy}nd Year</td>
+                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
+                            <button
+                              onClick={() => handleViewCourses(student.id)}
+                              className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                            >
+                              View ({student.courses.length})
+                            </button>
+                          </td>
+                          <td className="py-4">
+                            <button className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           ) : activeTab === 'courses' ? (
             <div className="space-y-6">
