@@ -52,7 +52,7 @@ async def create_student(
         logger.info(f"Found department: {dept['name']}, shortName: {dept['shortName']}")
 
         file_content = await file.read() if file else None
-        registration_number = await student_db.generate_registration_number(student_model.yearOfJoining, student_model.department)
+        registration_number = await student_db.generate_registration_number(str(student_model.yearOfJoining), student_model.department)
         result = await student_db.create_student(student_model, file_content, registration_number)
         return result
 
@@ -66,7 +66,6 @@ async def create_student(
         logger.error(f"Unexpected error in create_student: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.get("/students", response_model=List[Dict[str, Any]])
 async def get_students(student_db: StudentDB = Depends(get_student_db)):
     try:
@@ -76,7 +75,6 @@ async def get_students(student_db: StudentDB = Depends(get_student_db)):
     except Exception as e:
         logger.error(f"Error in get_students: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/students/{id}", response_model=Dict[str, Any])
 async def get_student(id: str, student_db: StudentDB = Depends(get_student_db)):
@@ -93,7 +91,6 @@ async def get_student(id: str, student_db: StudentDB = Depends(get_student_db)):
     except Exception as e:
         logger.error(f"Unexpected error in get_student: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.put("/students/{id}", response_model=Dict[str, Any])
 async def update_student(
@@ -122,16 +119,49 @@ async def update_student(
         logger.error(f"Unexpected error in update_student: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.delete("/students/{id}", response_model=Dict[str, Any])
 async def delete_student(id: str, student_db: StudentDB = Depends(get_student_db)):
     try:
         result = await student_db.delete_student(id)
         logger.info(f"Student deleted via API: {id}")
         return result
-    except HTTPException as e:
-        logger.error(f"HTTPException in delete_student: {e.detail}")
-        raise e
+    except ValueError as e:
+        logger.error(f"ValueError in delete_student: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error in delete_student: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/students/{student_id}/courses/{course_id}", response_model=Dict[str, Any])
+async def assign_course(
+    student_id: str,
+    course_id: str,
+    student_db: StudentDB = Depends(get_student_db)
+):
+    try:
+        result = await student_db.assign_course(student_id, course_id)
+        logger.info(f"Course {course_id} assigned to student {student_id} via API")
+        return result
+    except HTTPException as e:
+        logger.error(f"HTTPException in assign_course: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error in assign_course: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/students/{student_id}/courses/{course_id}", response_model=Dict[str, Any])
+async def remove_course(
+    student_id: str,
+    course_id: str,
+    student_db: StudentDB = Depends(get_student_db)
+):
+    try:
+        result = await student_db.remove_course(student_id, course_id)
+        logger.info(f"Course {course_id} removed from student {student_id} via API")
+        return result
+    except HTTPException as e:
+        logger.error(f"HTTPException in remove_course: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error in remove_course: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { GraduationCap, UserPlus, Search, Bell, Plus, BookOpen } from 'lucide-react';
+import { GraduationCap, UserPlus, Search, Bell, Plus, BookOpen, Trash2, X } from 'lucide-react';
 import { AddStudentModal } from '../../components/modals/AddStudentModal';
 import toast from 'react-hot-toast';
+
+interface Course {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface Student {
   id: string;
@@ -11,11 +17,7 @@ interface Student {
   program: string;
   yearOfStudy: string;
   email: string;
-  courses: {
-    id: string;
-    code: string;
-    name: string;
-  }[];
+  courses: Course[];
 }
 
 interface Announcement {
@@ -37,6 +39,10 @@ export const Students = () => {
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [availableCourses, setAvailableCourses] = useState<Course[]>([]);
+  const [selectedCourse, setSelectedCourse] = useState('');
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [studentToDelete, setStudentToDelete] = useState<string | null>(null);
 
   // Fetch students from backend on mount
   useEffect(() => {
@@ -76,21 +82,45 @@ export const Students = () => {
     fetchStudents();
   }, []);
 
+  // Fetch available courses when viewing courses tab
+  useEffect(() => {
+    if (activeTab !== 'courses' || !selectedStudent) return;
+    const fetchCourses = async () => {
+      try {
+        const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/subjects`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        setAvailableCourses(data.map((subject: any) => ({
+          id: subject.id,
+          code: subject.code,
+          name: subject.name,
+        })));
+      } catch (error) {
+        console.error('Error fetching courses:', error);
+        toast.error('Failed to fetch courses');
+      }
+    };
+    fetchCourses();
+  }, [activeTab, selectedStudent]);
+
   const handleAddStudent = async (studentData: any) => {
     try {
       const formData = new FormData();
-      // Keep yearOfStudy and semester as strings, convert yearOfJoining to integer
       const formattedStudentData = {
         ...studentData,
         yearOfStudy: studentData.yearOfStudy || undefined,
         semester: studentData.semester || undefined,
         yearOfJoining: studentData.yearOfJoining ? parseInt(studentData.yearOfJoining, 10) : undefined,
       };
-      // Remove profilePicture from JSON data
       const { profilePicture, ...jsonData } = formattedStudentData;
-      // Append student data as JSON string
       formData.append('student', JSON.stringify(jsonData));
-      // Append file if provided
       if (profilePicture) {
         formData.append('file', profilePicture);
       }
@@ -132,6 +162,89 @@ export const Students = () => {
         // If parsing fails, use the raw error message
       }
       toast.error(errorMessage);
+    }
+  };
+
+  const handleDeleteStudent = async () => {
+    if (!studentToDelete) return;
+    try {
+      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/students/${studentToDelete}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      setStudents(prev => prev.filter(student => student.id !== studentToDelete));
+      setIsDeleteModalOpen(false);
+      setStudentToDelete(null);
+      toast.success('Student deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting student:', error);
+      toast.error('Failed to delete student');
+    }
+  };
+
+  const handleAssignCourse = async () => {
+    if (!selectedStudent || !selectedCourse) return;
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_BACKEND_URL}/api/students/${selectedStudent}/courses/${selectedCourse}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const updatedStudent = await response.json();
+      setStudents(prev =>
+        prev.map(student =>
+          student.id === selectedStudent
+            ? { ...student, courses: updatedStudent.courses }
+            : student
+        )
+      );
+      setSelectedCourse('');
+      toast.success('Course assigned successfully!');
+    } catch (error) {
+      console.error('Error assigning course:', error);
+      toast.error('Failed to assign course');
+    }
+  };
+
+  const handleRemoveCourse = async (courseId: string) => {
+    if (!selectedStudent) return;
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_BACKEND_URL}/api/students/${selectedStudent}/courses/${courseId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const updatedStudent = await response.json();
+      setStudents(prev =>
+        prev.map(student =>
+          student.id === selectedStudent
+            ? { ...student, courses: updatedStudent.courses }
+            : student
+        )
+      );
+      toast.success('Course removed successfully!');
+    } catch (error) {
+      console.error('Error removing course:', error);
+      toast.error('Failed to remove course');
     }
   };
 
@@ -229,18 +342,17 @@ export const Students = () => {
                     className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                   />
                 </div>
-                <select 
+                <select
                   value={selectedDepartment}
                   onChange={(e) => setSelectedDepartment(e.target.value)}
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="">All Departments</option>
+                  <option value="Electronics & Communication">Electronics & Communication</option>
                   <option value="Computer Science">Computer Science</option>
-                  <option value="Electronics">Electronics</option>
                   <option value="Mechanical">Mechanical</option>
-                  <option value="Civil">Civil</option>
                 </select>
-                <select 
+                <select
                   value={selectedYear}
                   onChange={(e) => setSelectedYear(e.target.value)}
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
@@ -254,43 +366,58 @@ export const Students = () => {
               </div>
 
               {isLoading ? (
-                <div className="text-center text-gray-600 dark:text-gray-400">Loading students...</div>
+                <div className="text-center py-10">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
+                  <p className="mt-4 text-gray-600 dark:text-gray-300">Loading students...</p>
+                </div>
               ) : filteredStudents.length === 0 ? (
-                <div className="text-center text-gray-600 dark:text-gray-400">No students found</div>
+                <div className="text-center py-10">
+                  <GraduationCap className="mx-auto text-gray-400" size={48} />
+                  <p className="mt-4 text-gray-600 dark:text-gray-300">No students found</p>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
-                      <tr className="text-left border-b border-gray-200 dark:border-gray-700">
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Reg. No</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Name</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Department</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Program</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Year</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Courses</th>
-                        <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
+                      <tr className="border-b border-gray-200 dark:border-gray-700">
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Name</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Reg Number</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Department</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Program</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Year</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Email</th>
+                        <th className="py-3 px-4 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                    <tbody>
                       {filteredStudents.map((student) => (
-                        <tr key={student.id}>
-                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.registrationNumber}</td>
-                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.program}</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.yearOfStudy}nd Year</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">
-                            <button
-                              onClick={() => handleViewCourses(student.id)}
-                              className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
-                            >
-                              View ({student.courses.length})
-                            </button>
-                          </td>
-                          <td className="py-4">
-                            <button className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
-                              Edit
-                            </button>
+                        <tr key={student.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                          <td className="py-4 px-4 text-gray-900 dark:text-white">{student.name}</td>
+                          <td className="py-4 px-4 text-gray-600 dark:text-gray-300">{student.registrationNumber}</td>
+                          <td className="py-4 px-4 text-gray-600 dark:text-gray-300">{student.department}</td>
+                          <td className="py-4 px-4 text-gray-600 dark:text-gray-300">{student.program}</td>
+                          <td className="py-4 px-4 text-gray-600 dark:text-gray-300">{student.yearOfStudy}</td>
+                          <td className="py-4 px-4 text-gray-600 dark:text-gray-300">{student.email}</td>
+                          <td className="py-4 px-4">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleViewCourses(student.id)}
+                                className="p-2 text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                                title="View Courses"
+                              >
+                                <BookOpen size={20} />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setStudentToDelete(student.id);
+                                  setIsDeleteModalOpen(true);
+                                }}
+                                className="p-2 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                                title="Delete Student"
+                              >
+                                <Trash2 size={20} />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -299,50 +426,101 @@ export const Students = () => {
                 </div>
               )}
             </>
-          ) : activeTab === 'courses' ? (
-            <div className="space-y-6">
-              {selectedStudentData ? (
-                <>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-                        {selectedStudentData.name}'s Registered Courses
-                      </h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Registration Number: {selectedStudentData.registrationNumber}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => {/* Implement course assignment */}}
-                      className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors flex items-center gap-2"
+          ) : activeTab === 'courses' && selectedStudentData ? (
+            <div>
+              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
+                Registered Courses for {selectedStudentData.name} ({selectedStudentData.registrationNumber})
+              </h3>
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Assign New Course
+                </label>
+                <div className="flex gap-4">
+                  <select
+                    value={selectedCourse}
+                    onChange={(e) => setSelectedCourse(e.target.value)}
+                    className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="">Select a course</option>
+                    {availableCourses.map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.code} - {course.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleAssignCourse}
+                    disabled={!selectedCourse}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    Assign
+                  </button>
+                </div>
+              </div>
+              {selectedStudentData.courses.length === 0 ? (
+                <p className="text-gray-600 dark:text-gray-300">No courses registered.</p>
+              ) : (
+                <div className="space-y-4">
+                  {selectedStudentData.courses.map((course) => (
+                    <div
+                      key={course.id}
+                      className="flex justify-between items-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
                     >
-                      <Plus size={18} />
-                      Assign Course
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {selectedStudentData.courses.map(course => (
-                      <div
-                        key={course.id}
-                        className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg flex justify-between items-center"
+                      <div>
+                        <p className="text-gray-900 dark:text-white font-medium">{course.code}</p>
+                        <p className="text-gray-600 dark:text-gray-300">{course.name}</p>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveCourse(course.id)}
+                        className="p-2 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
                       >
+                        <Trash2 size={20} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : activeTab === 'announcements' ? (
+            <div>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Announcements</h3>
+                <button
+                  onClick={() => setIsAnnouncementModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  <Plus size={20} />
+                  Add Announcement
+                </button>
+              </div>
+              {announcements.length === 0 ? (
+                <div className="text-center py-10">
+                  <Bell className="mx-auto text-gray-400" size={48} />
+                  <p className="mt-4 text-gray-600 dark:text-gray-300">No announcements available</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {announcements.map((announcement) => (
+                    <div
+                      key={announcement.id}
+                      className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg"
+                    >
+                      <div className="flex justify-between items-start">
                         <div>
-                          <h3 className="font-medium text-gray-900 dark:text-white">{course.name}</h3>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">{course.code}</p>
+                          <h4 className="text-lg font-medium text-gray-900 dark:text-white">{announcement.title}</h4>
+                          <p className="text-gray-600 dark:text-gray-300">{announcement.content}</p>
+                          <div className="mt-2 flex gap-2 items-center text-sm text-gray-500 dark:text-gray-400">
+                            <span>{new Date(announcement.date).toLocaleDateString()}</span>
+                            <span>•</span>
+                            <span className="capitalize">{announcement.type}</span>
+                          </div>
                         </div>
-                        <button
-                          onClick={() => {/* Implement course removal */}}
-                          className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                        >
-                          Remove
+                        <button className="p-2 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300">
+                          <Trash2 size={20} />
                         </button>
                       </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="text-center text-gray-600 dark:text-gray-400">
-                  Select a student to view their registered courses
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -355,6 +533,39 @@ export const Students = () => {
         onClose={() => setIsStudentModalOpen(false)}
         onSubmit={handleAddStudent}
       />
+
+      {isDeleteModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 max-w-md w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Confirm Deletion</h3>
+              <button
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                <X size={24} />
+              </button>
+            </div>
+            <p className="text-gray-600 dark:text-gray-300 mb-6">
+              Are you sure you want to delete this student? This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-4">
+              <button
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteStudent}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

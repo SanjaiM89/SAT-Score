@@ -59,6 +59,7 @@ class StudentDB:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["students"]
         self.department_collection = db["db.departments"]
+        self.subject_collection = db["db.subjects"]
 
     async def generate_registration_number(self, year: str, department_id: str) -> str:
         try:
@@ -74,13 +75,41 @@ class StudentDB:
             logger.error(f"Error generating registration number: {str(e)}")
             raise
 
+    async def get_applicable_courses(self, department_id: str, year_of_study: str, semester: str) -> List[Dict[str, Any]]:
+        try:
+            courses = []
+            async for subject in self.subject_collection.find({
+                "department": ObjectId(department_id),
+                "yearOfStudy": year_of_study,
+                "semester": semester
+            }):
+                courses.append({
+                    "id": str(subject["_id"]),
+                    "code": sanitize_string(subject.get("code", "")),
+                    "name": sanitize_string(subject.get("name", ""))
+                })
+            logger.info(f"Retrieved {len(courses)} courses for dept: {department_id}, year: {year_of_study}, semester: {semester}")
+            return courses
+        except Exception as e:
+            logger.error(f"Error retrieving courses: {str(e)}")
+            raise
+
     async def create_student(self, student: AddStudentModel, file_content: Optional[bytes], registration_number: str) -> Dict[str, Any]:
         try:
             student_data = student.dict(by_alias=True)
             student_data["registrationNumber"] = registration_number
             student_data["department"] = ObjectId(student_data["department"])
+            
+            # Automatically assign courses based on department, year, and semester
+            courses = await self.get_applicable_courses(
+                student_data["department"],
+                student_data["yearOfStudy"],
+                student_data["semester"]
+            )
+            student_data["courses"] = [course["id"] for course in courses] if courses else []
+
             if file_content:
-                student_data["fileContent"] = file_content  # Store as binary
+                student_data["fileContent"] = file_content
             result = await self.collection.insert_one(student_data)
             student_id = str(result.inserted_id)
             await self.department_collection.update_one(
@@ -89,13 +118,29 @@ class StudentDB:
             )
             inserted_student = await self.collection.find_one({"_id": ObjectId(student_id)})
             if inserted_student:
-                inserted_student["id"] = str(inserted_student["_id"])
-                inserted_student["department"] = str(inserted_student["department"])
-                del inserted_student["_id"]
-                if inserted_student.get("fileContent"):
-                    inserted_student["fileContent"] = base64.b64encode(inserted_student["fileContent"]).decode('utf-8')
-            logger.info(f"Student created with ID: {student_id}, updated department {student.department}")
-            return inserted_student
+                sanitized_student = {}
+                for key, value in inserted_student.items():
+                    if key == "_id":
+                        sanitized_student["id"] = str(value)
+                    elif key == "department":
+                        sanitized_student[key] = sanitize_string(value)
+                    elif key == "fileContent" and value:
+                        sanitized_student[key] = base64.b64encode(value).decode('utf-8')
+                    elif key == "courses":
+                        sanitized_student[key] = [
+                            {
+                                "id": str(course_id),
+                                "code": course["code"],
+                                "name": course["name"]
+                            } for course_id in value
+                            for course in courses if course["id"] == str(course_id)
+                        ]
+                    else:
+                        sanitized_student[key] = sanitize_string(value)
+                if "_id" in sanitized_student:
+                    del sanitized_student["_id"]
+            logger.info(f"Student created with ID: {student_id}, updated department {student.department}, assigned {len(courses)} courses")
+            return sanitized_student
         except Exception as e:
             logger.error(f"Error creating student: {str(e)}")
             raise
@@ -104,13 +149,23 @@ class StudentDB:
         try:
             students = []
             async for student in self.collection.find({}, {"fileContent": 0, "photo": 0}):
-                # Sanitize all fields to ensure UTF-8 compliance
+                # Fetch course details for each student
+                courses = []
+                if student.get("courses"):
+                    async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in student["courses"]]}}):
+                        courses.append({
+                            "id": str(subject["_id"]),
+                            "code": sanitize_string(subject.get("code", "")),
+                            "name": sanitize_string(subject.get("name", ""))
+                        })
                 sanitized_student = {}
                 for key, value in student.items():
                     if key == "_id":
                         sanitized_student["id"] = str(value)
                     elif key == "department":
                         sanitized_student[key] = sanitize_string(value)
+                    elif key == "courses":
+                        sanitized_student[key] = courses
                     else:
                         sanitized_student[key] = sanitize_string(value)
                 if "_id" in sanitized_student:
@@ -121,6 +176,38 @@ class StudentDB:
             return students
         except Exception as e:
             logger.error(f"Error retrieving students: {str(e)}")
+            raise
+
+    async def get_student(self, id: str) -> Optional[Dict[str, Any]]:
+        try:
+            student = await self.collection.find_one({"_id": ObjectId(id)}, {"fileContent": 0, "photo": 0})
+            if not student:
+                return None
+            # Fetch course details
+            courses = []
+            if student.get("courses"):
+                async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in student["courses"]]}}):
+                    courses.append({
+                        "id": str(subject["_id"]),
+                        "code": sanitize_string(subject.get("code", "")),
+                        "name": sanitize_string(subject.get("name", ""))
+                    })
+            sanitized_student = {}
+            for key, value in student.items():
+                if key == "_id":
+                    sanitized_student["id"] = str(value)
+                elif key == "department":
+                    sanitized_student[key] = sanitize_string(value)
+                elif key == "courses":
+                    sanitized_student[key] = courses
+                else:
+                    sanitized_student[key] = sanitize_string(value)
+            if "_id" in sanitized_student:
+                del sanitized_student["_id"]
+            logger.info(f"Retrieved student: {id}")
+            return sanitized_student
+        except Exception as e:
+            logger.error(f"Error retrieving student {id}: {str(e)}")
             raise
 
     async def update_student(self, id: str, student: AddStudentModel) -> Dict[str, Any]:
@@ -135,12 +222,23 @@ class StudentDB:
                 raise ValueError(f"Student with ID {id} not found")
             updated_student = await self.collection.find_one({"_id": ObjectId(id)}, {"fileContent": 0})
             if updated_student:
+                # Fetch course details
+                courses = []
+                if updated_student.get("courses"):
+                    async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in updated_student["courses"]]}}):
+                        courses.append({
+                            "id": str(subject["_id"]),
+                            "code": sanitize_string(subject.get("code", "")),
+                            "name": sanitize_string(subject.get("name", ""))
+                        })
                 sanitized_student = {}
                 for key, value in updated_student.items():
                     if key == "_id":
                         sanitized_student["id"] = str(value)
                     elif key == "department":
                         sanitized_student[key] = sanitize_string(value)
+                    elif key == "courses":
+                        sanitized_student[key] = courses
                     else:
                         sanitized_student[key] = sanitize_string(value)
                 if "_id" in sanitized_student:
@@ -157,14 +255,75 @@ class StudentDB:
             if not student:
                 raise ValueError(f"Student with ID {id} not found")
             result = await self.collection.delete_one({"_id": ObjectId(id)})
-            await self.department_collection.update_one(
-                {"_id": ObjectId(student["department"])},
-                {"$inc": {"totalStudents": -1}}
-            )
+            # Attempt to update department's totalStudents
+            try:
+                department_id = student.get("department")
+                if department_id:
+                    # Validate department_id as ObjectId
+                    try:
+                        dept_object_id = ObjectId(department_id)
+                        dept = await self.department_collection.find_one({"_id": dept_object_id})
+                        if dept:
+                            await self.department_collection.update_one(
+                                {"_id": dept_object_id},
+                                {"$inc": {"totalStudents": -1}}
+                            )
+                            logger.info(f"Updated totalStudents for department {dept['name']}")
+                        else:
+                            logger.warning(f"Department with ID {department_id} not found for student {id}")
+                    except Exception as e:
+                        logger.error(f"Invalid department ID {department_id} for student {id}: {str(e)}")
+                else:
+                    logger.warning(f"No department ID found for student {id}")
+            except Exception as e:
+                logger.error(f"Failed to update department for student {id}: {str(e)}")
+                # Continue with deletion despite department update failure
             logger.info(f"Student deleted with ID: {id}")
             return {"id": id, "status": "deleted"}
         except Exception as e:
             logger.error(f"Error deleting student {id}: {str(e)}")
+            raise
+
+    async def assign_course(self, student_id: str, course_id: str) -> Dict[str, Any]:
+        try:
+            student = await self.collection.find_one({"_id": ObjectId(student_id)})
+            if not student:
+                raise ValueError(f"Student with ID {student_id} not found")
+            course = await self.subject_collection.find_one({"_id": ObjectId(course_id)})
+            if not course:
+                raise ValueError(f"Course with ID {course_id} not found")
+            result = await self.collection.update_one(
+                {"_id": ObjectId(student_id)},
+                {"$addToSet": {"courses": ObjectId(course_id)}}
+            )
+            if result.matched_count == 0:
+                raise ValueError(f"Student with ID {student_id} not found")
+            updated_student = await self.get_student(student_id)
+            logger.info(f"Assigned course {course_id} to student {student_id}")
+            return updated_student
+        except Exception as e:
+            logger.error(f"Error assigning course {course_id} to student {student_id}: {str(e)}")
+            raise
+
+    async def remove_course(self, student_id: str, course_id: str) -> Dict[str, Any]:
+        try:
+            student = await self.collection.find_one({"_id": ObjectId(student_id)})
+            if not student:
+                raise ValueError(f"Student with ID {student_id} not found")
+            course = await self.subject_collection.find_one({"_id": ObjectId(course_id)})
+            if not course:
+                raise ValueError(f"Course with ID {course_id} not found")
+            result = await self.collection.update_one(
+                {"_id": ObjectId(student_id)},
+                {"$pull": {"courses": ObjectId(course_id)}}
+            )
+            if result.matched_count == 0:
+                raise ValueError(f"Student with ID {student_id} not found")
+            updated_student = await self.get_student(student_id)
+            logger.info(f"Removed course {course_id} from student {student_id}")
+            return updated_student
+        except Exception as e:
+            logger.error(f"Error removing course {course_id} from student {student_id}: {str(e)}")
             raise
 
 class DepartmentDB:

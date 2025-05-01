@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, validator
-from typing import Optional
+from typing import Optional, List
 from bson import ObjectId
 import logging
 import base64
@@ -34,6 +34,7 @@ class AddStudentModel(BaseModel):
     remarks: Optional[str] = Field(None, alias="remarks", max_length=500)
     yearOfJoining: int = Field(..., alias="yearOfJoining", ge=2000, le=datetime.now().year)
     registrationNumber: Optional[str] = Field(None, alias="registrationNumber")
+    courses: Optional[List[str]] = Field(None, alias="courses")
 
     @validator("dateOfBirth")
     def validate_date_of_birth(cls, v: str) -> str:
@@ -87,9 +88,6 @@ class AddStudentModel(BaseModel):
         except Exception:
             raise ValueError('Invalid department ID format')
         return v
-
-
-
 
     @validator("program")
     def validate_program(cls, v: str) -> str:
@@ -183,6 +181,15 @@ class AddStudentModel(BaseModel):
                 raise ValueError("registrationNumber year must match yearOfJoining")
         return v
 
+    @validator("courses", each_item=True)
+    def validate_course_id(cls, v: str) -> str:
+        try:
+            ObjectId(v)
+        except Exception:
+            logger.error(f"Invalid course ID: {v}. Must be a valid ObjectId")
+            raise ValueError("Each course ID must be a valid ObjectId")
+        return v
+
     class Config:
         validate_assignment = True
         arbitrary_types_allowed = True
@@ -200,19 +207,20 @@ class AddStudentModel(BaseModel):
                 "city": "Springfield",
                 "state": "IL",
                 "postalCode": "62701",
-                "department": "Electronics & Communication",
+                "department": "60d5f484f84d2c4f3c8b4567",  # Example ObjectId
                 "program": "BTECH",
                 "yearOfStudy": "1",
                 "semester": "1",
                 "section": "A",
                 "admissionType": "regular",
-                "scholarshipStatus": "false",
-                "hostelStudent": "false",
+                "scholarshipStatus": False,
+                "hostelStudent": False,
                 "bloodGroup": "O+",
                 "emergencyContact": "0987654321",
                 "remarks": "",
                 "yearOfJoining": 2025,
-                "registrationNumber": "2025EL0001"
+                "registrationNumber": "2025EL0001",
+                "courses": ["60d5f484f84d2c4f3c8b4568", "60d5f484f84d2c4f3c8b4569"]  # Example course ObjectIds
             }
         }
 
@@ -225,7 +233,11 @@ class StudentDB:
         try:
             student_data = student.dict(by_alias=True)
             student_data["registrationNumber"] = registration_number
-            student_data["courses"] = []  # Initialize courses as empty list
+            # Ensure courses are stored as ObjectIds in the database
+            if student_data.get("courses"):
+                student_data["courses"] = [ObjectId(course_id) for course_id in student_data["courses"]]
+            else:
+                student_data["courses"] = []  # Initialize as empty list if None
             if file_content:
                 student_data["profilePicture"] = file_content
             else:
@@ -246,6 +258,9 @@ class StudentDB:
                     # Encode binary data as Base64 for frontend
                     student["profilePicture"] = base64.b64encode(student["profilePicture"]).decode('utf-8')
                 student["_id"] = str(student["_id"])
+                # Convert course ObjectIds to strings
+                if student.get("courses"):
+                    student["courses"] = [str(course_id) for course_id in student["courses"]]
                 students.append(student)
             logger.info(f"Retrieved {len(students)} students")
             return students
@@ -261,6 +276,9 @@ class StudentDB:
                     # Encode binary data as Base64 for frontend
                     student["profilePicture"] = base64.b64encode(student["profilePicture"]).decode('utf-8')
                 student["_id"] = str(student["_id"])
+                # Convert course ObjectIds to strings
+                if student.get("courses"):
+                    student["courses"] = [str(course_id) for course_id in student["courses"]]
                 logger.info(f"Retrieved student with ID: {id}")
                 return student
             logger.warning(f"Student with ID {id} not found")

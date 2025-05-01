@@ -22,7 +22,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     city: '',
     state: '',
     postalCode: '',
-    department: '', // Will store department ID
+    department: '',
     program: '',
     yearOfStudy: '',
     semester: '',
@@ -34,6 +34,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
     emergencyContact: '',
     remarks: '',
     yearOfJoining: '',
+    courses: [] as string[],
   });
   const [file, setFile] = useState<File | null>(null);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
@@ -122,7 +123,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
       console.log('Sending student data:', formData);
       const response = await axios.post(`${import.meta.env.VITE_BACKEND_URL}/api/students`, data);
       console.log('Student creation response:', response.data);
-      onSubmit({ ...formData, id: response.data.id });
+      onSubmit({ ...formData, id: response.data.id, courses: response.data.courses });
       toast.success('Student added successfully!');
       setFormData({
         fullName: '',
@@ -148,6 +149,7 @@ export const AddStudentModal: React.FC<AddStudentModalProps> = ({ isOpen, onClos
         emergencyContact: '',
         remarks: '',
         yearOfJoining: '',
+        courses: [],
       });
       setFile(null);
       onClose();
