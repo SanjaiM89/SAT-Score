@@ -20,6 +20,7 @@ interface Subject {
   type: 'theory' | 'lab';
   semester: number;
   credits: number;
+  totalClasses: number;
 }
 
 export const DepartmentsAndSubjects = () => {
@@ -36,7 +37,9 @@ export const DepartmentsAndSubjects = () => {
     code: '',
     name: '',
     shortName: '',
-    numberOfClasses: 1
+    numberOfClasses: 1,
+    totalTeachers: 0,
+    totalStudents: 0,
   });
   const [newSubject, setNewSubject] = useState({
     code: '',
@@ -44,7 +47,8 @@ export const DepartmentsAndSubjects = () => {
     department: '',
     type: 'theory' as 'theory' | 'lab',
     semester: 1,
-    credits: 3
+    credits: 3,
+    totalClasses: 1
   });
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
@@ -109,7 +113,8 @@ export const DepartmentsAndSubjects = () => {
                 department: subj.department || '',
                 type: subj.type || 'theory',
                 semester: Number(subj.semester) || 1,
-                credits: Number(subj.credits) || 3
+                credits: Number(subj.credits) || 3,
+                totalClasses: Number(subj.totalClasses) || 1
               };
             })
             .filter((subj: Subject | null) => subj !== null) as Subject[]
@@ -135,7 +140,9 @@ export const DepartmentsAndSubjects = () => {
         code: newDepartment.code,
         name: newDepartment.name,
         shortName: newDepartment.shortName.toUpperCase(),
-        numberOfClasses: newDepartment.numberOfClasses
+        numberOfClasses: newDepartment.numberOfClasses,
+        totalTeachers: newDepartment.totalTeachers,
+        totalStudents: newDepartment.totalStudents
       };
 
       const method = editingDepartment ? 'PUT' : 'POST';
@@ -181,7 +188,7 @@ export const DepartmentsAndSubjects = () => {
 
       setIsDepartmentModalOpen(false);
       setEditingDepartment(null);
-      setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1 });
+      setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1, totalTeachers: 0, totalStudents: 0 });
       await fetchData();
     } catch (error: any) {
       console.error('Error saving department:', error);
@@ -224,7 +231,9 @@ export const DepartmentsAndSubjects = () => {
       code: department.code,
       name: department.name,
       shortName: department.shortName,
-      numberOfClasses: department.numberOfClasses
+      numberOfClasses: department.numberOfClasses,
+      totalTeachers: department.totalTeachers,
+      totalStudents: department.totalStudents
     });
     setIsDepartmentModalOpen(true);
   };
@@ -238,7 +247,8 @@ export const DepartmentsAndSubjects = () => {
         department: newSubject.department,
         type: newSubject.type,
         semester: newSubject.semester,
-        credits: newSubject.credits
+        credits: newSubject.credits,
+        totalClasses: newSubject.totalClasses
       };
 
       const method = editingSubject ? 'PUT' : 'POST';
@@ -268,7 +278,8 @@ export const DepartmentsAndSubjects = () => {
         department: subject.department || '',
         type: subject.type || 'theory',
         semester: Number(subject.semester) || 1,
-        credits: Number(subject.credits) || 3
+        credits: Number(subject.credits) || 3,
+        totalClasses: Number(subject.totalClasses) || 1
       };
       console.log('Mapped subject:', mappedSubject);
 
@@ -290,7 +301,8 @@ export const DepartmentsAndSubjects = () => {
         department: '',
         type: 'theory',
         semester: 1,
-        credits: 3
+        credits: 3,
+        totalClasses: 1
       });
       await fetchData();
     } catch (error: any) {
@@ -336,7 +348,8 @@ export const DepartmentsAndSubjects = () => {
       department: subject.department,
       type: subject.type,
       semester: subject.semester,
-      credits: subject.credits
+      credits: subject.credits,
+      totalClasses: subject.totalClasses
     });
     setIsSubjectModalOpen(true);
   };
@@ -397,11 +410,11 @@ export const DepartmentsAndSubjects = () => {
           onClick={() => {
             if (activeTab === 'departments') {
               setEditingDepartment(null);
-              setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1 });
+              setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1, totalTeachers: 0, totalStudents: 0 });
               setIsDepartmentModalOpen(true);
             } else {
               setEditingSubject(null);
-              setNewSubject({ code: '', name: '', department: '', type: 'theory', semester: 1, credits: 3 });
+              setNewSubject({ code: '', name: '', department: '', type: 'theory', semester: 1, credits: 3, totalClasses: 1 });
               setIsSubjectModalOpen(true);
             }
           }}
@@ -525,6 +538,7 @@ export const DepartmentsAndSubjects = () => {
                     <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Type</th>
                     <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Semester</th>
                     <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Credits</th>
+                    <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Classes</th>
                     <th className="pb-3 text-sm font-medium text-gray-500 dark:text-gray-400">Actions</th>
                   </tr>
                 </thead>
@@ -539,6 +553,7 @@ export const DepartmentsAndSubjects = () => {
                       </td>
                       <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{subject.semester}</td>
                       <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{subject.credits}</td>
+                      <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{subject.totalClasses}</td>
                       <td className="py-4">
                         <div className="flex items-center space-x-3">
                           <button
@@ -619,7 +634,7 @@ export const DepartmentsAndSubjects = () => {
                   onClick={() => {
                     setIsDepartmentModalOpen(false);
                     setEditingDepartment(null);
-                    setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1 });
+                    setNewDepartment({ code: '', name: '', shortName: '', numberOfClasses: 1, totalTeachers: 0, totalStudents: 0 });
                   }}
                   className="px-4 py-2 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100"
                 >
@@ -714,13 +729,24 @@ export const DepartmentsAndSubjects = () => {
                   required
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Total Classes</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={newSubject.totalClasses}
+                  onChange={(e) => setNewSubject(prev => ({ ...prev, totalClasses: parseInt(e.target.value) }))}
+                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:text-white"
+                  required
+                />
+              </div>
               <div className="flex justify-end space-x-3 mt-6">
                 <button
                   type="button"
                   onClick={() => {
                     setIsSubjectModalOpen(false);
                     setEditingSubject(null);
-                    setNewSubject({ code: '', name: '', department: '', type: 'theory', semester: 1, credits: 3 });
+                    setNewSubject({ code: '', name: '', department: '', type: 'theory', semester: 1, credits: 3, totalClasses: 1 });
                   }}
                   className="px-4 py-2 text-gray-600 hover:text-gray-800 dark:text-gray-300 dark:hover:text-gray-100"
                 >

@@ -79,15 +79,23 @@ export const Students = () => {
   const handleAddStudent = async (studentData: any) => {
     try {
       const formData = new FormData();
-      Object.entries(studentData).forEach(([key, value]) => {
-        if (key === 'profilePicture' && value) {
-          formData.append(key, value);
-        } else if (value !== null && value !== undefined) {
-          formData.append(key, value as string);
-        }
-      });
+      // Keep yearOfStudy and semester as strings, convert yearOfJoining to integer
+      const formattedStudentData = {
+        ...studentData,
+        yearOfStudy: studentData.yearOfStudy || undefined,
+        semester: studentData.semester || undefined,
+        yearOfJoining: studentData.yearOfJoining ? parseInt(studentData.yearOfJoining, 10) : undefined,
+      };
+      // Remove profilePicture from JSON data
+      const { profilePicture, ...jsonData } = formattedStudentData;
+      // Append student data as JSON string
+      formData.append('student', JSON.stringify(jsonData));
+      // Append file if provided
+      if (profilePicture) {
+        formData.append('file', profilePicture);
+      }
 
-      console.log('Sending student data to backend:', studentData);
+      console.log('Sending student data to backend:', jsonData);
 
       const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/api/students`, {
         method: 'POST',

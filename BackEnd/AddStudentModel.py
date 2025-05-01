@@ -80,14 +80,16 @@ class AddStudentModel(BaseModel):
             raise ValueError(f"gender must be one of {allowed}")
         return v.lower()
 
-    @validator("department")
-    def validate_department(cls, v: str) -> str:
-        # Note: Dynamic validation requires database access, which is handled in Student.py
-        # For model validation, we only ensure it's a non-empty string
-        if not v.strip():
-            logger.error("Department cannot be empty")
-            raise ValueError("department cannot be empty")
+    @validator('department')
+    def validate_department_id(cls, v):
+        try:
+            ObjectId(v)
+        except Exception:
+            raise ValueError('Invalid department ID format')
         return v
+
+
+
 
     @validator("program")
     def validate_program(cls, v: str) -> str:

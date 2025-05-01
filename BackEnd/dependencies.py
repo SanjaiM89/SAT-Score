@@ -2,8 +2,7 @@ from fastapi import Depends
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import AsyncGenerator
 import logging
-from AddStudentModel import StudentDB
-from database import DepartmentDB, SubjectDB
+from database import StudentDB, DepartmentDB, SubjectDB
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

@@ -1,126 +1,137 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
-from typing import List, Optional
-from AddStudentModel import AddStudentModel, StudentDB
-from database import DepartmentDB
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
+from pydantic import ValidationError
+from typing import Optional, Dict, Any, List
+from database import StudentDB, DepartmentDB
+from AddStudentModel import AddStudentModel
 from dependencies import get_student_db, get_department_db
+from bson import ObjectId
 import logging
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-student_router = APIRouter()
+router = APIRouter()
 
-async def generate_registration_number(db: StudentDB, department_db: DepartmentDB, department: str, year_of_joining: int) -> str:
-    # Fetch department to get shortName
-    dept = await department_db.collection.find_one({'name': department})
-    if not dept:
-        raise HTTPException(status_code=400, detail=f"Department {department} not found")
-    
-    short_name = dept['shortName']
-    if not short_name or len(short_name) != 2:
-        raise HTTPException(status_code=400, detail=f"Invalid shortName for department {department}")
-
-    # Count students in the department
-    students_count = await db.collection.count_documents({'department': department})
-    sequence = str(students_count + 1).zfill(4)
-    return f"{year_of_joining}{short_name}{sequence}"
-
-@student_router.post("/students", response_model=dict)
+@router.post("/students", response_model=Dict[str, Any])
 async def create_student(
-    fullName: str = Form(...),
-    dateOfBirth: str = Form(...),
-    gender: str = Form(...),
-    phoneNumber: str = Form(...),
-    email: str = Form(...),
-    parentName: str = Form(...),
-    parentContact: str = Form(...),
-    address: str = Form(...),
-    city: str = Form(...),
-    state: str = Form(...),
-    postalCode: str = Form(...),
-    department: str = Form(...),
-    program: str = Form(...),
-    yearOfStudy: str = Form(...),
-    semester: str = Form(...),
-    section: str = Form(...),
-    admissionType: str = Form(...),
-    scholarshipStatus: str = Form(...),
-    hostelStudent: str = Form(...),
-    bloodGroup: str = Form(...),
-    emergencyContact: str = Form(...),
-    remarks: Optional[str] = Form(None),
-    yearOfJoining: int = Form(...),
-    profilePicture: UploadFile = File(None),
+    student: str = Body(...),
+    file: Optional[UploadFile] = File(None),
     student_db: StudentDB = Depends(get_student_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
-        # Create student data dictionary
-        student_data = {
-            "fullName": fullName,
-            "dateOfBirth": dateOfBirth,
-            "gender": gender,
-            "phoneNumber": phoneNumber,
-            "email": email,
-            "parentName": parentName,
-            "parentContact": parentContact,
-            "address": address,
-            "city": city,
-            "state": state,
-            "postalCode": postalCode,
-            "department": department,
-            "program": program,
-            "yearOfStudy": yearOfStudy,
-            "semester": semester,
-            "section": section,
-            "admissionType": admissionType,
-            "scholarshipStatus": scholarshipStatus,
-            "hostelStudent": hostelStudent,
-            "bloodGroup": bloodGroup,
-            "emergencyContact": emergencyContact,
-            "remarks": remarks,
-            "yearOfJoining": yearOfJoining
-        }
-        logger.info(f"Received student data: {student_data}")
-        
-        # Validate with AddStudentModel
-        student = AddStudentModel(**student_data)
-        
-        # Read file content
-        file_content = await profilePicture.read() if profilePicture else None
-        
-        # Generate registration number
-        registration_number = await generate_registration_number(student_db, department_db, student.department, student.yearOfJoining)
-        
-        # Create student in database
-        result = await student_db.create_student(student, file_content, registration_number)
-        logger.info(f"Student created with ID: {result.get('id')}")
-        return result
-    except Exception as e:
-        logger.error(f"Error creating student: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to create student: {str(e)}")
+        logger.info(f"Raw student JSON: {student}")
+        student_data = json.loads(student)
+        try:
+            student_model = AddStudentModel(**student_data)
+        except ValidationError as ve:
+            logger.error(f"Validation error for student data: {ve.errors()}")
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in ve.errors()]
+            )
+        logger.info(f"Received student data: {student_model.dict(by_alias=True)}")
 
-@student_router.get("/students", response_model=List[dict])
+        try:
+            dept_id = ObjectId(student_model.department)
+        except Exception as e:
+            logger.error(f"Invalid department ID format: {student_model.department}, error: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid department ID format: {student_model.department}")
+        
+        logger.info(f"Querying department with ID: {student_model.department} in database")
+        dept = await department_db.collection.find_one({'_id': dept_id})
+        if not dept:
+            all_depts = []
+            async for d in department_db.collection.find():
+                all_depts.append({'id': str(d['_id']), 'name': d.get('name')})
+            logger.error(f"Department with ID {student_model.department} not found. Available: {all_depts}")
+            raise HTTPException(status_code=400, detail=f"Department with ID {student_model.department} not found")
+
+        logger.info(f"Found department: {dept['name']}, shortName: {dept['shortName']}")
+
+        file_content = await file.read() if file else None
+        registration_number = await student_db.generate_registration_number(student_model.yearOfJoining, student_model.department)
+        result = await student_db.create_student(student_model, file_content, registration_number)
+        return result
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in student data: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Invalid JSON in student data: {str(e)}")
+    except HTTPException as e:
+        logger.error(f"HTTPException in create_student: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error in create_student: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/students", response_model=List[Dict[str, Any]])
 async def get_students(student_db: StudentDB = Depends(get_student_db)):
     try:
         students = await student_db.get_students()
-        logger.info(f"Retrieved {len(students)} students")
+        logger.info(f"Retrieved {len(students)} students via API")
         return students
     except Exception as e:
-        logger.error(f"Error retrieving students: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve students: {str(e)}")
+        logger.error(f"Error in get_students: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@student_router.get("/students/{id}", response_model=dict)
+
+@router.get("/students/{id}", response_model=Dict[str, Any])
 async def get_student(id: str, student_db: StudentDB = Depends(get_student_db)):
     try:
         student = await student_db.get_student(id)
-        if student:
-            logger.info(f"Retrieved student with ID: {id}")
-            return student
-        else:
-            logger.warning(f"Student with ID {id} not found")
+        if not student:
+            logger.warning(f"Student not found for ID: {id}")
             raise HTTPException(status_code=404, detail="Student not found")
+        logger.info(f"Student retrieved via API: {id}")
+        return student
+    except HTTPException as e:
+        logger.error(f"HTTPException in get_student: {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error retrieving student {id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve student: {str(e)}")
+        logger.error(f"Unexpected error in get_student: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/students/{id}", response_model=Dict[str, Any])
+async def update_student(
+    id: str,
+    student: AddStudentModel,
+    student_db: StudentDB = Depends(get_student_db),
+    department_db: DepartmentDB = Depends(get_department_db)
+):
+    try:
+        logger.info(f"Querying department with ID: {student.department}")
+        dept = await department_db.collection.find_one({'_id': ObjectId(student.department)})
+        if not dept:
+            all_depts = []
+            async for d in department_db.collection.find():
+                all_depts.append({'id': str(d['_id']), 'name': d.get('name')})
+            logger.error(f"Department with ID {student.department} not found. Available: {all_depts}")
+            raise HTTPException(status_code=400, detail=f"Department with ID {student.department} not found")
+        
+        result = await student_db.update_student(id, student)
+        logger.info(f"Student updated via API: {id}")
+        return result
+    except HTTPException as e:
+        logger.error(f"HTTPException in update_student: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error in update_student: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/students/{id}", response_model=Dict[str, Any])
+async def delete_student(id: str, student_db: StudentDB = Depends(get_student_db)):
+    try:
+        result = await student_db.delete_student(id)
+        logger.info(f"Student deleted via API: {id}")
+        return result
+    except HTTPException as e:
+        logger.error(f"HTTPException in delete_student: {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error in delete_student: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

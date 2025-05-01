@@ -1,11 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from admin.Student import student_router
+from admin.Student import router as student_router
 from admin.DepartmentsAndSubjects import router as department_router
 from database import Database
 import logging
 import uvicorn
+from starlette.middleware.errors import ServerErrorMiddleware
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SAT Score Backend", lifespan=lifespan)
 
+# Add error middleware to log all unhandled exceptions
+app.add_middleware(
+    ServerErrorMiddleware,
+    debug=True
+)
+
 # CORS middleware to allow frontend requests
 app.add_middleware(
     CORSMiddleware,
@@ -46,8 +53,20 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(student_router, prefix="/api")
-app.include_router(department_router, prefix="/api")
+try:
+    app.include_router(student_router, prefix="/api")
+    logger.info("Student router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include student_router: {str(e)}")
+try:
+    app.include_router(department_router, prefix="/api")
+    logger.info("Department router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include department_router: {str(e)}")
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the SAT Score API"}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
