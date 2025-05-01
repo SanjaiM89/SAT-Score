@@ -1,19 +1,21 @@
-import React, { useState } from 'react';
-import { Calculator, Save, AlertCircle, Search, Filter } from 'lucide-react';
-
-interface Student {
-  id: string;
-  name: string;
-  rollNumber: string;
-  department: string;
-  year: number;
-  subjects: Subject[];
-}
+import React, { useState, useEffect } from 'react';
+import { Calculator, Save, AlertCircle, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 
 interface Subject {
   id: string;
   code: string;
   name: string;
+}
+
+interface Student {
+  id: string;
+  name: string; // Changed from fullName to name
+  registrationNumber: string; // Changed from regNumber to registrationNumber
+  department: string;
+  year: number;
+  subjects?: Subject[]; // Optional to handle missing subjects
 }
 
 interface MarksData {
@@ -30,40 +32,6 @@ interface MarkCriteria {
   formula: string;
 }
 
-const mockSubjects: Subject[] = [
-  { id: '1', code: 'CS201', name: 'Data Structures' },
-  { id: '2', code: 'CS202', name: 'Database Systems' },
-  { id: '3', code: 'CS203', name: 'Computer Networks' },
-  { id: '4', code: 'CS204', name: 'Operating Systems' },
-];
-
-const students: Student[] = [
-  { 
-    id: '1', 
-    name: 'Alice Johnson', 
-    rollNumber: 'CSE001',
-    department: 'Computer Science',
-    year: 2,
-    subjects: mockSubjects 
-  },
-  { 
-    id: '2', 
-    name: 'Bob Smith', 
-    rollNumber: 'CSE002',
-    department: 'Computer Science',
-    year: 2,
-    subjects: mockSubjects 
-  },
-  { 
-    id: '3', 
-    name: 'Charlie Brown', 
-    rollNumber: 'CSE003',
-    department: 'Electronics',
-    year: 3,
-    subjects: mockSubjects 
-  },
-];
-
 export const SATScore = () => {
   const [activeTab, setActiveTab] = useState<'marks' | 'criteria'>('marks');
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
@@ -78,13 +46,39 @@ export const SATScore = () => {
     external: 70,
     formula: '(internal * 0.3) + (external * 0.7)'
   });
+  const [students, setStudents] = useState<Student[]>([]);
+  const [departments, setDepartments] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [studentsPerPage, setStudentsPerPage] = useState(50);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [studentsRes, criteriaRes, deptsRes] = await Promise.all([
+          axios.get('http://localhost:8000/api/students'),
+          axios.get('http://localhost:8000/api/mark-criteria'),
+          axios.get('http://localhost:8000/api/departments')
+        ]);
+        console.log('Students response:', studentsRes.data); // Debug log
+        setStudents(studentsRes.data);
+        setMarkCriteria(criteriaRes.data);
+        setDepartments(deptsRes.data.map((dept: any) => dept.shortName || dept.name));
+        setLoading(false);
+      } catch (error) {
+        toast.error('Failed to fetch data');
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
 
   const handleMarkChange = (studentId: string, subjectId: string, value: string) => {
     const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
     setMarks(prev => ({
       ...prev,
       [studentId]: {
-        ...prev[studentId],
+        ...prev[studentId] || {},
         [subjectId]: {
           final: numValue
         }
@@ -107,28 +101,69 @@ export const SATScore = () => {
 
   const handleSave = async () => {
     setSaving(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      const marksData = Object.entries(marks).flatMap(([studentId, subjects]) =>
+        Object.entries(subjects).map(([subjectId, data]) => ({
+          student_id: studentId,
+          subject_id: subjectId,
+          final: data.final,
+          academic_year: '2024-2025'
+        }))
+      );
+      await axios.post('http://localhost:8000/api/marks', { marks: marksData });
+      toast.success('Marks saved successfully!');
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      toast.error('Failed to save marks');
+      setSaving(false);
+    }
   };
 
   const handleCriteriaSave = async () => {
     setSaving(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    try {
+      await axios.post('http://localhost:8000/api/mark-criteria', markCriteria);
+      toast.success('Mark criteria saved successfully!');
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      toast.error('Failed to save mark criteria');
+      setSaving(false);
+    }
   };
 
-  const filteredStudents = students.filter(student => {
-    const matchesSearch = 
-      student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      student.rollNumber.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
-    const matchesYear = !selectedYear || student.year === parseInt(selectedYear);
-    return matchesSearch && matchesDepartment && matchesYear;
-  });
+  const filteredStudents = students
+    .filter(student => {
+      const matchesSearch =
+        (student.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (student.registrationNumber || '').toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
+      const matchesYear = !selectedYear || student.year === parseInt(selectedYear);
+      return matchesSearch && matchesDepartment && matchesYear;
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  const totalPages = Math.ceil(filteredStudents.length / studentsPerPage);
+  const paginatedStudents = filteredStudents.slice(
+    (currentPage - 1) * studentsPerPage,
+    currentPage * studentsPerPage
+  );
+
+  const handlePageChange = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+    }
+  };
+
+  const handleStudentsPerPageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setStudentsPerPage(parseInt(e.target.value));
+    setCurrentPage(1);
+  };
+
+  if (loading) return <div>Loading...</div>;
 
   return (
     <div className="space-y-8">
@@ -172,8 +207,8 @@ export const SATScore = () => {
         <div className="p-6">
           {activeTab === 'marks' ? (
             <div className="space-y-6">
-              <div className="flex gap-4">
-                <div className="flex-1 relative">
+              <div className="flex gap-4 flex-wrap">
+                <div className="flex-1 relative min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                   <input
                     type="text"
@@ -189,8 +224,9 @@ export const SATScore = () => {
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="">All Departments</option>
-                  <option value="Computer Science">Computer Science</option>
-                  <option value="Electronics">Electronics</option>
+                  {departments.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
                 </select>
                 <select
                   value={selectedYear}
@@ -203,13 +239,23 @@ export const SATScore = () => {
                   <option value="3">3rd Year</option>
                   <option value="4">4th Year</option>
                 </select>
+                <select
+                  value={studentsPerPage}
+                  onChange={handleStudentsPerPageChange}
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                >
+                  <option value="10">10 per page</option>
+                  <option value="20">20 per page</option>
+                  <option value="30">30 per page</option>
+                  <option value="50">50 per page</option>
+                </select>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="text-left">
-                      <th className="pb-4 text-sm font-medium text-gray-500 dark:text-gray-400">Roll No</th>
+                      <th className="pb-4 text-sm font-medium text-gray-500 dark:text-gray-400">Reg No</th>
                       <th className="pb-4 text-sm font-medium text-gray-500 dark:text-gray-400">Name</th>
                       <th className="pb-4 text-sm font-medium text-gray-500 dark:text-gray-400">Department</th>
                       <th className="pb-4 text-sm font-medium text-gray-500 dark:text-gray-400">Year</th>
@@ -217,58 +263,92 @@ export const SATScore = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {filteredStudents.map((student) => (
-                      <React.Fragment key={student.id}>
-                        <tr>
-                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.rollNumber}</td>
-                          <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
-                          <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.year}nd Year</td>
-                          <td className="py-4">
-                            <button
-                              onClick={() => setSelectedStudent(selectedStudent === student.id ? null : student.id)}
-                              className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
-                            >
-                              {selectedStudent === student.id ? 'Close' : 'Enter Marks'}
-                            </button>
-                          </td>
-                        </tr>
-                        {selectedStudent === student.id && (
+                    {paginatedStudents.map((student) => {
+                      console.log(`Student ${student.name}:`, { registrationNumber: student.registrationNumber, subjects: student.subjects }); // Debug log
+                      return (
+                        <React.Fragment key={student.id}>
                           <tr>
-                            <td colSpan={5} className="py-4 bg-gray-50 dark:bg-gray-700">
-                              <div className="px-4 space-y-4">
-                                {student.subjects.map((subject) => (
-                                  <div key={subject.id} className="flex items-center space-x-4">
-                                    <span className="w-48 text-sm text-gray-900 dark:text-white">
-                                      {subject.name} ({subject.code})
-                                    </span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="100"
-                                      value={getStudentMarks(student.id, subject.id) || ''}
-                                      onChange={(e) => handleMarkChange(student.id, subject.id, e.target.value)}
-                                      className="w-20 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg 
-                                        focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
-                                      placeholder="Final"
-                                    />
-                                    <span className={`px-2 py-1 rounded text-xs font-medium
-                                      ${getGrade(getStudentMarks(student.id, subject.id)) === 'A+' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' :
-                                      getGrade(getStudentMarks(student.id, subject.id)) === 'A' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400' :
-                                      'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400'}`}
-                                    >
-                                      {getGrade(getStudentMarks(student.id, subject.id))}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
+                            <td className="py-4 text-sm text-gray-900 dark:text-white">{student.registrationNumber || 'N/A'}</td>
+                            <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
+                            <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
+                            <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.year}nd Year</td>
+                            <td className="py-4">
+                              <button
+                                onClick={() => setSelectedStudent(selectedStudent === student.id ? null : student.id)}
+                                className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                              >
+                                {selectedStudent === student.id ? 'Close' : 'Enter Marks'}
+                              </button>
                             </td>
                           </tr>
-                        )}
-                      </React.Fragment>
-                    ))}
+                          {selectedStudent === student.id && (
+                            <tr>
+                              <td colSpan={5} className="py-4 bg-gray-50 dark:bg-gray-700">
+                                <div className="px-4 space-y-4">
+                                  {student.subjects && student.subjects.length > 0 ? (
+                                    student.subjects.map((subject) => (
+                                      <div key={subject.id} className="flex items-center space-x-4">
+                                        <span className="w-48 text-sm text-gray-900 dark:text-white">
+                                          {subject.name} ({subject.code})
+                                        </span>
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          value={getStudentMarks(student.id, subject.id) || ''}
+                                          onChange={(e) => handleMarkChange(student.id, subject.id, e.target.value)}
+                                          className="w-20 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg 
+                                            focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                                          placeholder="Final"
+                                        />
+                                        <span className={`px-2 py-1 rounded text-xs font-medium
+                                          ${getGrade(getStudentMarks(student.id, subject.id)) === 'A+' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' :
+                                          getGrade(getStudentMarks(student.id, subject.id)) === 'A' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400' :
+                                          'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400'}`}
+                                        >
+                                          {getGrade(getStudentMarks(student.id, subject.id))}
+                                        </span>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="text-sm text-gray-600 dark:text-gray-400">
+                                      No subjects assigned to this student.
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
+              </div>
+
+              <div className="flex items-center justify-between mt-4">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Showing {((currentPage - 1) * studentsPerPage) + 1} to {Math.min(currentPage * studentsPerPage, filteredStudents.length)} of {filteredStudents.length} students
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-50"
+                  >
+                    <ChevronLeft size={20} />
+                  </button>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 disabled:opacity-50"
+                  >
+                    <ChevronRight size={20} />
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
