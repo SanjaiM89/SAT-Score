@@ -49,7 +49,7 @@ const iconMap: { [key: string]: React.ComponentType<{ className: string }> } = {
   ClipboardCheck,
 };
 
-export const Dashboard = () => {
+export const TeacherDashboard = () => {
   const [dashboardData, setDashboardData] = useState<DashboardData>({
     classes: [],
     stats: [],
