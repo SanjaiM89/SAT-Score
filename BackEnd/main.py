@@ -6,6 +6,8 @@ from admin.DepartmentsAndSubjects import router as department_router
 from admin.Teachers import router as teacher_router
 from admin.AssignMarks import router as marks_router
 from teacher.InternalMarks import router as internal_marks_router
+from teacher.SATMarks import router as sat_marks_router
+from auth.login import router as login_router
 from database import Database
 import logging
 import uvicorn
@@ -13,6 +15,7 @@ from starlette.middleware.errors import ServerErrorMiddleware
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)  # Reduce uvicorn access logs
 logger = logging.getLogger(__name__)
 
 # Database initialization
@@ -81,6 +84,16 @@ try:
     logger.info("Internal marks router included successfully")
 except Exception as e:
     logger.error(f"Failed to include internal_marks_router: {str(e)}")
+try:
+    app.include_router(sat_marks_router, prefix="/api")
+    logger.info("SAT marks router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include sat_marks_router: {str(e)}")
+try:
+    app.include_router(login_router, prefix="/api")
+    logger.info("Login router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include login_router: {str(e)}")
 
 @app.get("/")
 async def root():

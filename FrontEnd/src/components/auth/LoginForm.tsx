@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { UserRole } from '../../types/auth';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
 
 interface LoginFormProps {
   onSubmit: (email: string, password: string, role: UserRole) => void;
@@ -14,15 +16,67 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [userId, setUserId] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (role === 'admin' && email === 'admin@gmail.com' && password === '123456') {
-      onSubmit(email, password, role);
-    } else if (role === 'teacher') {
-      onSubmit(teacherId, password, role);
-    } else if (role === 'student') {
-      onSubmit(studentId, password, role);
+    setLoading(true);
+    try {
+      const payload = {
+        role,
+        ...(role === 'admin' && { email, password }),
+        ...(role === 'teacher' && { teacherId, teacherName, password }),
+        ...(role === 'student' && { studentId, password }),
+      };
+
+      console.log('Login payload:', JSON.stringify(payload, null, 2));
+      const response = await axios.post('http://localhost:8000/api/login', payload);
+      const { id, fullName, requiresPasswordChange } = response.data;
+
+      setUserId(id);
+      setRequiresPasswordChange(requiresPasswordChange);
+
+      if (!requiresPasswordChange) {
+        onSubmit(role === 'admin' ? email : id, password, role);
+        toast.success(`Welcome, ${fullName || id}!`);
+      } else {
+        toast.success('Please change your password');
+      }
+    } catch (error: any) {
+      console.error('Login error:', JSON.stringify(error.response?.data || error.message, null, 2));
+      toast.error(error.response?.data?.detail || 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      toast.error('Password must be at least 6 characters');
+      return;
+    }
+    setLoading(true);
+    try {
+      const payload = {
+        role,
+        id: role === 'teacher' ? teacherId : studentId,
+        newPassword,
+      };
+
+      console.log('Change password payload:', JSON.stringify(payload, null, 2));
+      await axios.post('http://localhost:8000/api/change-password', payload);
+      setRequiresPasswordChange(false);
+      onSubmit(role === 'teacher' ? teacherId : studentId, newPassword, role);
+      toast.success('Password changed successfully');
+    } catch (error: any) {
+      console.error('Change password error:', JSON.stringify(error.response?.data || error.message, null, 2));
+      toast.error(error.response?.data?.detail || 'Failed to change password');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -124,71 +178,123 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
           <p className="text-gray-600 dark:text-gray-300">Sign in to access your account</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Role</label>
-            <div className="grid grid-cols-3 gap-3">
-              {(['student', 'teacher', 'admin'] as UserRole[]).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => {
-                    setRole(r);
-                    setEmail('');
-                    setTeacherName('');
-                    setTeacherId('');
-                    setStudentId('');
-                    setPassword('');
-                  }}
-                  className={`py-2 px-4 rounded-lg text-sm font-medium capitalize transition-all
-                    ${role === r 
-                      ? 'bg-indigo-600 text-white' 
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'
-                    }`}
-                >
-                  {r}
-                </button>
-              ))}
+        {requiresPasswordChange ? (
+          <form onSubmit={handleChangePassword} className="space-y-6">
+            <div className="space-y-2">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Change Password</h2>
+              <p className="text-gray-600 dark:text-gray-300">Please set a new password</p>
             </div>
-          </div>
-
-          {renderInputFields()}
-
-          <div className="relative">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="peer w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 
-                focus:outline-none focus:border-indigo-500 bg-transparent transition-all
-                placeholder-transparent"
-              placeholder="Password"
-              required
-            />
-            <label className="absolute left-4 -top-2.5 bg-white dark:bg-gray-800 px-1 text-sm text-gray-600 
-              dark:text-gray-300 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-base 
-              peer-focus:-top-2.5 peer-focus:text-sm">
-              Password
-            </label>
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="peer w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 
+                  focus:outline-none focus:border-indigo-500 bg-transparent transition-all
+                  placeholder-transparent"
+                placeholder="New Password"
+                required
+              />
+              <label className="absolute left-4 -top-2.5 bg-white dark:bg-gray-800 px-1 text-sm text-gray-600 
+                dark:text-gray-300 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-base 
+                peer-focus:-top-2.5 peer-focus:text-sm">
+                New Password
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
             <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg font-medium
+                hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+                transition-all flex items-center justify-center gap-2"
             >
-              {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              {loading ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <LogIn size={20} />
+              )}
+              Change Password
             </button>
-          </div>
+          </form>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Role</label>
+              <div className="grid grid-cols-3 gap-3">
+                {(['student', 'teacher', 'admin'] as UserRole[]).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => {
+                      setRole(r);
+                      setEmail('');
+                      setTeacherName('');
+                      setTeacherId('');
+                      setStudentId('');
+                      setPassword('');
+                    }}
+                    className={`py-2 px-4 rounded-lg text-sm font-medium capitalize transition-all
+                      ${role === r 
+                        ? 'bg-indigo-600 text-white' 
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'
+                      }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-          <button
-            type="submit"
-            className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg font-medium
-              hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
-              transition-all flex items-center justify-center gap-2"
-          >
-            <LogIn size={20} />
-            Sign In
-          </button>
-        </form>
+            {renderInputFields()}
+
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="peer w-full px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 
+                  focus:outline-none focus:border-indigo-500 bg-transparent transition-all
+                  placeholder-transparent"
+                placeholder="Password"
+                required
+              />
+              <label className="absolute left-4 -top-2.5 bg-white dark:bg-gray-800 px-1 text-sm text-gray-600 
+                dark:text-gray-300 transition-all peer-placeholder-shown:top-3 peer-placeholder-shown:text-base 
+                peer-focus:-top-2.5 peer-focus:text-sm">
+                Password
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg font-medium
+                hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+                transition-all flex items-center justify-center gap-2"
+            >
+              {loading ? (
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <LogIn size={20} />
+              )}
+              Sign In
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

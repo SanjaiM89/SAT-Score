@@ -1,61 +1,89 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BookOpen, GraduationCap, ClipboardCheck, Users } from 'lucide-react';
+import axios from 'axios';
+import toast from 'react-hot-toast';
+
+interface Schedule {
+  day: string;
+  time: string;
+  room: string;
+}
 
 interface AssignedClass {
   id: string;
   name: string;
   subject: string;
+  subject_id: string;
   department: string;
   semester: number;
   students: number;
   batch: string;
   section: string;
-  schedule: {
-    day: string;
-    time: string;
-    room: string;
-  }[];
+  schedule: Schedule[];
 }
 
-const assignedClasses: AssignedClass[] = [
-  {
-    id: '1',
-    name: 'CSE-A',
-    subject: 'Data Structures',
-    department: 'Computer Science',
-    semester: 3,
-    students: 60,
-    batch: '2025',
-    section: 'A',
-    schedule: [
-      { day: 'Monday', time: '9:00 AM - 10:30 AM', room: 'CS-301' },
-      { day: 'Wednesday', time: '11:00 AM - 12:30 PM', room: 'CS-301' },
-    ],
-  },
-  {
-    id: '2',
-    name: 'CSE-B',
-    subject: 'Database Systems',
-    department: 'Computer Science',
-    semester: 3,
-    students: 55,
-    batch: '2025',
-    section: 'B',
-    schedule: [
-      { day: 'Tuesday', time: '9:00 AM - 10:30 AM', room: 'CS-302' },
-      { day: 'Thursday', time: '11:00 AM - 12:30 PM', room: 'CS-302' },
-    ],
-  },
-];
+interface PendingTask {
+  task_type: string;
+  class_name: string;
+  subject: string;
+  due_date: string;
+}
 
-const stats = [
-  { title: 'Assigned Classes', value: '4', icon: Users, color: 'bg-blue-500' },
-  { title: 'Total Students', value: '210', icon: GraduationCap, color: 'bg-green-500' },
-  { title: 'Subjects', value: '3', icon: BookOpen, color: 'bg-purple-500' },
-  { title: 'Pending Marks', value: '2', icon: ClipboardCheck, color: 'bg-orange-500' },
-];
+interface Stat {
+  title: string;
+  value: string;
+  icon: string;
+  color: string;
+}
 
-export const TeacherDashboard = () => {
+interface DashboardData {
+  classes: AssignedClass[];
+  stats: Stat[];
+  pending_tasks: PendingTask[];
+}
+
+const iconMap: { [key: string]: React.ComponentType<{ className: string }> } = {
+  Users,
+  GraduationCap,
+  BookOpen,
+  ClipboardCheck,
+};
+
+export const Dashboard = () => {
+  const [dashboardData, setDashboardData] = useState<DashboardData>({
+    classes: [],
+    stats: [],
+    pending_tasks: [],
+  });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        const response = await axios.get('http://localhost:8000/api/teacher/dashboard', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        });
+        console.log('Dashboard response:', JSON.stringify(response.data, null, 2));
+        setDashboardData(response.data);
+      } catch (error: any) {
+        console.error('Fetch dashboard error:', error);
+        toast.error(error.response?.data?.detail || 'Failed to load dashboard data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 animate-fade-in">
       <div>
@@ -64,29 +92,32 @@ export const TeacherDashboard = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {stats.map((stat) => (
-          <div
-            key={stat.title}
-            className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-shadow"
-          >
-            <div className="flex items-center space-x-4">
-              <div className={`p-3 rounded-xl ${stat.color}`}>
-                <stat.icon className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">{stat.title}</p>
-                <p className="text-2xl font-bold text-gray-900 dark:text-white">{stat.value}</p>
+        {dashboardData.stats.map((stat) => {
+          const Icon = iconMap[stat.icon];
+          return (
+            <div
+              key={stat.title}
+              className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg hover:shadow-xl transition-shadow"
+            >
+              <div className="flex items-center space-x-4">
+                <div className={`p-3 rounded-xl ${stat.color}`}>
+                  <Icon className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{stat.title}</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">{stat.value}</p>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Assigned Classes</h2>
           <div className="space-y-4">
-            {assignedClasses.map((cls) => (
+            {dashboardData.classes.map((cls) => (
               <div
                 key={cls.id}
                 className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
@@ -130,26 +161,45 @@ export const TeacherDashboard = () => {
           <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Pending Tasks</h2>
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                <div className="flex items-center">
-                  <ClipboardCheck className="w-5 h-5 text-red-500 dark:text-red-400 mr-3" />
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-white">FAT 2 Marks Entry</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">CSE-A Data Structures</p>
+              {dashboardData.pending_tasks.map((task, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between p-3 rounded-lg ${
+                    task.due_date === new Date().toISOString().split('T')[0]
+                      ? 'bg-red-50 dark:bg-red-900/20'
+                      : 'bg-yellow-50 dark:bg-yellow-900/20'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <ClipboardCheck
+                      className={`w-5 h-5 ${
+                        task.due_date === new Date().toISOString().split('T')[0]
+                          ? 'text-red-500 dark:text-red-400'
+                          : 'text-yellow-500 dark:text-yellow-400'
+                      } mr-3`}
+                    />
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">{task.task_type}</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {task.class_name} - {task.subject}
+                      </p>
+                    </div>
                   </div>
+                  <span
+                    className={`text-sm ${
+                      task.due_date === new Date().toISOString().split('T')[0]
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-yellow-600 dark:text-yellow-400'
+                    }`}
+                  >
+                    {task.due_date === new Date().toISOString().split('T')[0]
+                      ? 'Due Today'
+                      : `Due in ${Math.ceil(
+                          (new Date(task.due_date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
+                        )} days`}
+                  </span>
                 </div>
-                <span className="text-sm text-red-600 dark:text-red-400">Due Today</span>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
-                <div className="flex items-center">
-                  <ClipboardCheck className="w-5 h-5 text-yellow-500 dark:text-yellow-400 mr-3" />
-                  <div>
-                    <p className="font-medium text-gray-900 dark:text-white">Assignment Marks</p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">IT-A Web Technologies</p>
-                  </div>
-                </div>
-                <span className="text-sm text-yellow-600 dark:text-yellow-400">Due in 2 days</span>
-              </div>
+              ))}
             </div>
           </div>
 

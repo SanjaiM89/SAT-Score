@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Save, AlertCircle, Search, Filter, Lock } from 'lucide-react';
+import { Save, AlertCircle, Search, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 
 interface Student {
   id: string;
   name: string;
   rollNumber: string;
   department: string;
-  year: number;
+  year: string; // Changed to string to match backend yearOfStudy
+  sat_marks: SATMark[];
 }
 
 interface Subject {
@@ -17,8 +19,18 @@ interface Subject {
   isSubmitted: boolean;
 }
 
+interface SATMark {
+  student_id: string;
+  subject_id: string;
+  subject_code: string;
+  subject_name: string;
+  marks: number;
+  isSubmitted: boolean;
+  academic_year: string;
+}
+
 interface MarksData {
-  [key: string]: {
+  [studentId: string]: {
     [subjectId: string]: {
       marks: number;
       isSubmitted: boolean;
@@ -34,35 +46,77 @@ export const SATMarks = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
+  const [students, setStudents] = useState<Student[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
 
-  // Mock data - replace with actual API calls
-  const assignedSubjects: Subject[] = [
-    { id: '1', code: 'CS201', name: 'Data Structures', isSubmitted: false },
-    { id: '2', code: 'CS202', name: 'Database Systems', isSubmitted: true },
-  ];
+  // Fetch students and subjects on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch students and SAT marks
+        const marksResponse = await axios.get('http://localhost:8000/api/sat-marks');
+        console.log('SAT marks response:', JSON.stringify(marksResponse.data, null, 2));
+        setStudents(marksResponse.data);
 
-  const students: Student[] = [
-    { 
-      id: '1', 
-      name: 'Alice Johnson', 
-      rollNumber: 'CSE001',
-      department: 'Computer Science',
-      year: 2,
-    },
-    // Add more students
-  ];
+        // Initialize marks state from fetched data
+        const initialMarks: MarksData = {};
+        marksResponse.data.forEach((student: Student) => {
+          initialMarks[student.id] = {};
+          student.sat_marks.forEach((mark: SATMark) => {
+            initialMarks[student.id][mark.subject_id] = {
+              marks: mark.marks,
+              isSubmitted: mark.isSubmitted,
+            };
+          });
+        });
+        setMarks(initialMarks);
+
+        // Fetch subjects (mocked as assigned subjects)
+        // Replace with actual API call to /api/subjects if available
+        const subjectsResponse = await axios.get('http://localhost:8000/api/subjects');
+        const assignedSubjects = subjectsResponse.data.map((subj: any) => ({
+          id: subj.id,
+          code: subj.code,
+          name: subj.name,
+          isSubmitted: false, // Will be updated based on marks
+        }));
+        setSubjects(assignedSubjects);
+
+        // Update subjects' isSubmitted based on marks
+        const submittedSubjects = new Set<string>();
+        marksResponse.data.forEach((student: Student) => {
+          student.sat_marks.forEach((mark: SATMark) => {
+            if (mark.isSubmitted) {
+              submittedSubjects.add(mark.subject_id);
+            }
+          });
+        });
+        setSubjects(prev =>
+          prev.map(subj => ({
+            ...subj,
+            isSubmitted: submittedSubjects.has(subj.id),
+          }))
+        );
+      } catch (error: any) {
+        console.error('Fetch error:', error);
+        toast.error(error.response?.data?.detail || 'Failed to fetch data');
+      }
+    };
+
+    fetchData();
+  }, []);
 
   const handleMarkChange = (studentId: string, subjectId: string, value: string) => {
     const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
     setMarks(prev => ({
       ...prev,
       [studentId]: {
-        ...prev[studentId],
+        ...prev[studentId] || {},
         [subjectId]: {
           marks: numValue,
-          isSubmitted: false
-        }
-      }
+          isSubmitted: prev[studentId]?.[subjectId]?.isSubmitted || false,
+        },
+      },
     }));
   };
 
@@ -71,27 +125,45 @@ export const SATMarks = () => {
   };
 
   const isSubjectSubmitted = (subjectId: string) => {
-    return assignedSubjects.find(s => s.id === subjectId)?.isSubmitted || false;
+    return subjects.find(s => s.id === subjectId)?.isSubmitted || false;
   };
 
   const handleSave = async () => {
+    if (!selectedSubject) {
+      toast.error('Please select a subject');
+      return;
+    }
+
     setSaving(true);
     try {
-      // Implement API call to save marks
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success('Marks saved successfully!');
+      const payload = {
+        marks: filteredStudents.map(student => ({
+          student_id: student.id,
+          subject_id: selectedSubject,
+          marks: getStudentMarks(student.id, selectedSubject),
+          academic_year: '2024-2025',
+        })),
+      };
+      console.log('Saving SAT marks payload:', JSON.stringify(payload, null, 2));
+      const response = await axios.post('http://localhost:8000/api/sat-marks', payload);
+      console.log('Save SAT marks response:', response.data);
+      toast.success(response.data.status);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (error) {
-      toast.error('Failed to save marks');
+    } catch (error: any) {
+      console.error('Save marks error:', error);
+      toast.error(error.response?.data?.detail || 'Failed to save marks');
     } finally {
       setSaving(false);
     }
   };
 
   const handleSubmit = async () => {
-    if (!selectedSubject) return;
-    
+    if (!selectedSubject) {
+      toast.error('Please select a subject');
+      return;
+    }
+
     const confirmed = window.confirm(
       'Are you sure you want to submit these marks? You won\'t be able to edit them after submission.'
     );
@@ -100,10 +172,16 @@ export const SATMarks = () => {
 
     setSaving(true);
     try {
-      // Implement API call to submit marks
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success('Marks submitted successfully!');
-      // Update local state to reflect submission
+      const payload = {
+        subject_id: selectedSubject,
+        academic_year: '2024-2025',
+      };
+      console.log('Submitting SAT marks payload:', JSON.stringify(payload, null, 2));
+      const response = await axios.post('http://localhost:8000/api/sat-marks/submit', payload);
+      console.log('Submit SAT marks response:', response.data);
+      toast.success(response.data.status);
+
+      // Update local state
       setMarks(prev => {
         const newMarks = { ...prev };
         Object.keys(newMarks).forEach(studentId => {
@@ -113,19 +191,25 @@ export const SATMarks = () => {
         });
         return newMarks;
       });
-    } catch (error) {
-      toast.error('Failed to submit marks');
+      setSubjects(prev =>
+        prev.map(subj =>
+          subj.id === selectedSubject ? { ...subj, isSubmitted: true } : subj
+        )
+      );
+    } catch (error: any) {
+      console.error('Submit marks error:', error);
+      toast.error(error.response?.data?.detail || 'Failed to submit marks');
     } finally {
       setSaving(false);
     }
   };
 
   const filteredStudents = students.filter(student => {
-    const matchesSearch = 
+    const matchesSearch =
       student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       student.rollNumber.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
-    const matchesYear = !selectedYear || student.year === parseInt(selectedYear);
+    const matchesYear = !selectedYear || student.year === selectedYear;
     return matchesSearch && matchesDepartment && matchesYear;
   });
 
@@ -149,7 +233,7 @@ export const SATMarks = () => {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">Select a subject</option>
-                {assignedSubjects.map(subject => (
+                {subjects.map(subject => (
                   <option key={subject.id} value={subject.id} disabled={subject.isSubmitted}>
                     {subject.name} ({subject.code}) {subject.isSubmitted ? '- Submitted' : ''}
                   </option>
@@ -183,8 +267,8 @@ export const SATMarks = () => {
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">All</option>
-                <option value="Computer Science">Computer Science</option>
-                <option value="Electronics">Electronics</option>
+                <option value="681365cfa50f290c0bdfd2d4">Computer Science</option>
+                <option value="some_other_dept_id">Electronics</option>
               </select>
             </div>
 
@@ -231,7 +315,7 @@ export const SATMarks = () => {
                       <td className="py-4 text-sm text-gray-900 dark:text-white">{student.rollNumber}</td>
                       <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
                       <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
-                      <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.year}nd Year</td>
+                      <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.year} Year</td>
                       <td className="py-4">
                         <input
                           type="number"
@@ -242,6 +326,7 @@ export const SATMarks = () => {
                           className="w-20 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg 
                             focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                           placeholder="Marks"
+                          disabled={marks[student.id]?.[selectedSubject]?.isSubmitted}
                         />
                       </td>
                     </tr>
