@@ -5,6 +5,7 @@ from admin.Student import router as student_router
 from admin.DepartmentsAndSubjects import router as department_router
 from admin.Teachers import router as teacher_router
 from admin.AssignMarks import router as marks_router
+from teacher.InternalMarks import router as internal_marks_router
 from database import Database
 import logging
 import uvicorn
@@ -75,6 +76,11 @@ try:
     logger.info("Marks router included successfully")
 except Exception as e:
     logger.error(f"Failed to include marks_router: {str(e)}")
+try:
+    app.include_router(internal_marks_router, prefix="/api")
+    logger.info("Internal marks router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include internal_marks_router: {str(e)}")
 
 @app.get("/")
 async def root():

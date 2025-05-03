@@ -11,11 +11,14 @@ interface Subject {
 
 interface Student {
   id: string;
-  name: string; // Changed from fullName to name
-  registrationNumber: string; // Changed from regNumber to registrationNumber
+  fullName: string;
+  registrationNumber: string;
   department: string;
-  year: number;
-  subjects?: Subject[]; // Optional to handle missing subjects
+  year?: number | null;
+  yearOfStudy?: string;
+  subjects: Subject[];
+  courses?: Subject[];
+  marks?: { [subjectId: string]: number } | string; // Handle string or object
 }
 
 interface MarksData {
@@ -44,7 +47,7 @@ export const SATScore = () => {
   const [markCriteria, setMarkCriteria] = useState<MarkCriteria>({
     internal: 30,
     external: 70,
-    formula: '(internal * 0.3) + (external * 0.7)'
+    formula: '(internal * 0.3) + (external * 0.7)',
   });
   const [students, setStudents] = useState<Student[]>([]);
   const [departments, setDepartments] = useState<string[]>([]);
@@ -55,17 +58,54 @@ export const SATScore = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        const timestamp = new Date().getTime();
         const [studentsRes, criteriaRes, deptsRes] = await Promise.all([
-          axios.get('http://localhost:8000/api/students'),
-          axios.get('http://localhost:8000/api/mark-criteria'),
-          axios.get('http://localhost:8000/api/departments')
+          axios.get(`http://localhost:8000/api/students?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/mark-criteria?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/departments?t=${timestamp}`),
         ]);
-        console.log('Students response:', studentsRes.data); // Debug log
-        setStudents(studentsRes.data);
+        console.log('Raw /api/students response:', JSON.stringify(studentsRes.data, null, 2));
+        console.log('Raw /api/departments response:', JSON.stringify(deptsRes.data, null, 2));
+
+        // Initialize marks state from fetched data
+        const initialMarks: MarksData = {};
+        const mappedStudents = studentsRes.data.map((student: any) => {
+          let studentMarks: { [subjectId: string]: number } = {};
+          if (typeof student.marks === 'string') {
+            try {
+              studentMarks = JSON.parse(student.marks);
+            } catch (e) {
+              console.error(`Failed to parse marks for student ${student.id}:`, student.marks);
+            }
+          } else {
+            studentMarks = student.marks || {};
+          }
+
+          Object.entries(studentMarks).forEach(([subjectId, final]) => {
+            initialMarks[student.id] = initialMarks[student.id] || {};
+            initialMarks[student.id][subjectId] = { final: Number(final) };
+          });
+
+          return {
+            id: student.id,
+            fullName: student.fullName || 'Unknown',
+            registrationNumber: student.registrationNumber || 'N/A',
+            department: student.department || 'N/A',
+            year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : null,
+            yearOfStudy: student.yearOfStudy || 'N/A',
+            subjects: student.courses || student.subjects || [],
+            marks: studentMarks,
+          };
+        });
+
+        setStudents(mappedStudents);
+        setMarks(initialMarks);
         setMarkCriteria(criteriaRes.data);
-        setDepartments(deptsRes.data.map((dept: any) => dept.shortName || dept.name));
+        setDepartments(deptsRes.data.map((dept: any) => dept.name || dept.shortName || 'N/A'));
         setLoading(false);
+        console.log('Initial marks state:', JSON.stringify(initialMarks, null, 2));
       } catch (error) {
+        console.error('Fetch error:', error);
         toast.error('Failed to fetch data');
         setLoading(false);
       }
@@ -74,20 +114,20 @@ export const SATScore = () => {
   }, []);
 
   const handleMarkChange = (studentId: string, subjectId: string, value: string) => {
-    const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
-    setMarks(prev => ({
+    const numValue = value === '' ? 0 : Math.min(100, Math.max(0, parseFloat(value) || 0));
+    setMarks((prev) => ({
       ...prev,
       [studentId]: {
         ...prev[studentId] || {},
         [subjectId]: {
-          final: numValue
-        }
-      }
+          final: numValue,
+        },
+      },
     }));
   };
 
   const getStudentMarks = (studentId: string, subjectId: string) => {
-    return marks[studentId]?.[subjectId]?.final || 0;
+    return marks[studentId]?.[subjectId]?.final ?? 0;
   };
 
   const getGrade = (marks: number) => {
@@ -102,20 +142,77 @@ export const SATScore = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const marksData = Object.entries(marks).flatMap(([studentId, subjects]) =>
-        Object.entries(subjects).map(([subjectId, data]) => ({
-          student_id: studentId,
-          subject_id: subjectId,
-          final: data.final,
-          academic_year: '2024-2025'
-        }))
-      );
+      const marksData = Object.entries(marks)
+        .flatMap(([studentId, subjects]) =>
+          Object.entries(subjects)
+            .filter(([_, data]) => data.final != null && !isNaN(data.final)) // Skip null or invalid finals
+            .map(([subjectId, data]) => ({
+              student_id: studentId,
+              subject_id: subjectId,
+              final: parseFloat(data.final.toFixed(1)),
+              academic_year: '2024-2025',
+            }))
+        )
+        .filter((mark) => {
+          // Validate subject_id is a valid ObjectId (24-character hex string)
+          const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(mark.subject_id);
+          if (!isValidObjectId) {
+            console.warn(`Skipping invalid subject_id: ${mark.subject_id}`);
+            return false;
+          }
+          return true;
+        });
+
+      if (!marksData.length) {
+        toast.error('No valid marks to save');
+        setSaving(false);
+        return;
+      }
+
+      console.log('Sending marks payload:', JSON.stringify({ marks: marksData }, null, 2));
       await axios.post('http://localhost:8000/api/marks', { marks: marksData });
       toast.success('Marks saved successfully!');
+
+      // Refresh students to update marks
+      const timestamp = new Date().getTime();
+      const studentsRes = await axios.get(`http://localhost:8000/api/students?t=${timestamp}`);
+      const initialMarks: MarksData = {};
+      const mappedStudents = studentsRes.data.map((student: any) => {
+        let studentMarks: { [subjectId: string]: number } = {};
+        if (typeof student.marks === 'string') {
+          try {
+            studentMarks = JSON.parse(student.marks);
+          } catch (e) {
+            console.error(`Failed to parse marks for student ${student.id}:`, student.marks);
+          }
+        } else {
+          studentMarks = student.marks || {};
+        }
+
+        Object.entries(studentMarks).forEach(([subjectId, final]) => {
+          initialMarks[student.id] = initialMarks[student.id] || {};
+          initialMarks[student.id][subjectId] = { final: Number(final) };
+        });
+
+        return {
+          id: student.id,
+          fullName: student.fullName || 'Unknown',
+          registrationNumber: student.registrationNumber || 'N/A',
+          department: student.department || 'N/A',
+          year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : null,
+          yearOfStudy: student.yearOfStudy || 'N/A',
+          subjects: student.courses || student.subjects || [],
+          marks: studentMarks,
+        };
+      });
+
+      setStudents(mappedStudents);
+      setMarks(initialMarks);
       setSaving(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Save marks error:', JSON.stringify(error.response?.data || error.message, null, 2));
       toast.error('Failed to save marks');
       setSaving(false);
     }
@@ -130,21 +227,23 @@ export const SATScore = () => {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
+      console.error('Save criteria error:', error);
       toast.error('Failed to save mark criteria');
       setSaving(false);
     }
   };
 
   const filteredStudents = students
-    .filter(student => {
+    .filter((student) => {
       const matchesSearch =
-        (student.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (student.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (student.registrationNumber || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
-      const matchesYear = !selectedYear || student.year === parseInt(selectedYear);
+      const year = student.year !== undefined && student.year !== null ? student.year : student.yearOfStudy ? parseInt(student.yearOfStudy) : undefined;
+      const matchesYear = !selectedYear || (year && year === parseInt(selectedYear));
       return matchesSearch && matchesDepartment && matchesYear;
     })
-    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    .sort((a, b) => (a.fullName || '').localeCompare(b.fullName || ''));
 
   const totalPages = Math.ceil(filteredStudents.length / studentsPerPage);
   const paginatedStudents = filteredStudents.slice(
@@ -163,6 +262,14 @@ export const SATScore = () => {
     setCurrentPage(1);
   };
 
+  const formatYear = (student: Student) => {
+    const year = student.year !== undefined && student.year !== null ? student.year : student.yearOfStudy ? parseInt(student.yearOfStudy) : undefined;
+    if (!year) return 'N/A';
+    const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
+    const suffix = suffixes[year as keyof typeof suffixes] || 'th';
+    return `${year}${suffix} Year`;
+  };
+
   if (loading) return <div>Loading...</div>;
 
   return (
@@ -178,28 +285,18 @@ export const SATScore = () => {
             <button
               onClick={() => setActiveTab('marks')}
               className={`px-6 py-4 text-sm font-medium transition-colors relative
-                ${activeTab === 'marks'
-                  ? 'text-indigo-600 dark:text-indigo-400'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-                }`}
+                ${activeTab === 'marks' ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
             >
               Mark Entry
-              {activeTab === 'marks' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
-              )}
+              {activeTab === 'marks' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />}
             </button>
             <button
               onClick={() => setActiveTab('criteria')}
               className={`px-6 py-4 text-sm font-medium transition-colors relative
-                ${activeTab === 'criteria'
-                  ? 'text-indigo-600 dark:text-indigo-400'
-                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-                }`}
+                ${activeTab === 'criteria' ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
             >
               Mark Criteria
-              {activeTab === 'criteria' && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
-              )}
+              {activeTab === 'criteria' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />}
             </button>
           </nav>
         </div>
@@ -224,8 +321,10 @@ export const SATScore = () => {
                   className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 >
                   <option value="">All Departments</option>
-                  {departments.map(dept => (
-                    <option key={dept} value={dept}>{dept}</option>
+                  {departments.map((dept) => (
+                    <option key={dept} value={dept}>
+                      {dept}
+                    </option>
                   ))}
                 </select>
                 <select
@@ -264,14 +363,22 @@ export const SATScore = () => {
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                     {paginatedStudents.map((student) => {
-                      console.log(`Student ${student.name}:`, { registrationNumber: student.registrationNumber, subjects: student.subjects }); // Debug log
+                      console.log(`Student ${student.fullName}:`, {
+                        registrationNumber: student.registrationNumber,
+                        fullName: student.fullName,
+                        department: student.department,
+                        year: student.year,
+                        yearOfStudy: student.yearOfStudy,
+                        subjects: student.subjects,
+                        marks: student.marks,
+                      });
                       return (
                         <React.Fragment key={student.id}>
                           <tr>
                             <td className="py-4 text-sm text-gray-900 dark:text-white">{student.registrationNumber || 'N/A'}</td>
-                            <td className="py-4 text-sm text-gray-900 dark:text-white">{student.name}</td>
+                            <td className="py-4 text-sm text-gray-900 dark:text-white">{student.fullName}</td>
                             <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.department}</td>
-                            <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{student.year}nd Year</td>
+                            <td className="py-4 text-sm text-gray-600 dark:text-gray-400">{formatYear(student)}</td>
                             <td className="py-4">
                               <button
                                 onClick={() => setSelectedStudent(selectedStudent === student.id ? null : student.id)}
@@ -301,19 +408,16 @@ export const SATScore = () => {
                                             focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                                           placeholder="Final"
                                         />
-                                        <span className={`px-2 py-1 rounded text-xs font-medium
-                                          ${getGrade(getStudentMarks(student.id, subject.id)) === 'A+' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' :
-                                          getGrade(getStudentMarks(student.id, subject.id)) === 'A' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400' :
-                                          'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400'}`}
+                                        <span
+                                          className={`px-2 py-1 rounded text-xs font-medium
+                                          ${getGrade(getStudentMarks(student.id, subject.id)) === 'A+' ? 'bg-green-100 text-green-800 dark:bg-green-900/20 dark:text-green-400' : getGrade(getStudentMarks(student.id, subject.id)) === 'A' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-400'}`}
                                         >
                                           {getGrade(getStudentMarks(student.id, subject.id))}
                                         </span>
                                       </div>
                                     ))
                                   ) : (
-                                    <div className="text-sm text-gray-600 dark:text-gray-400">
-                                      No subjects assigned to this student.
-                                    </div>
+                                    <div className="text-sm text-gray-600 dark:text-gray-400">No subjects assigned to this student.</div>
                                   )}
                                 </div>
                               </td>
@@ -357,24 +461,20 @@ export const SATScore = () => {
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Mark Distribution</h2>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Internal Weightage (%)
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Internal Weightage (%)</label>
                     <input
                       type="number"
                       value={markCriteria.internal}
-                      onChange={(e) => setMarkCriteria(prev => ({ ...prev, internal: parseInt(e.target.value) }))}
+                      onChange={(e) => setMarkCriteria((prev) => ({ ...prev, internal: parseInt(e.target.value) }))}
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      External Weightage (%)
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">External Weightage (%)</label>
                     <input
                       type="number"
                       value={markCriteria.external}
-                      onChange={(e) => setMarkCriteria(prev => ({ ...prev, external: parseInt(e.target.value) }))}
+                      onChange={(e) => setMarkCriteria((prev) => ({ ...prev, external: parseInt(e.target.value) }))}
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                     />
                   </div>
@@ -382,19 +482,15 @@ export const SATScore = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Final Mark Calculation Formula
-                </label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Final Mark Calculation Formula</label>
                 <input
                   type="text"
                   value={markCriteria.formula}
-                  onChange={(e) => setMarkCriteria(prev => ({ ...prev, formula: e.target.value }))}
+                  onChange={(e) => setMarkCriteria((prev) => ({ ...prev, formula: e.target.value }))}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                   placeholder="e.g., (internal * 0.3) + (external * 0.7)"
                 />
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  Use 'internal' and 'external' variables in your formula
-                </p>
+                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Use 'internal' and 'external' variables in your formula</p>
               </div>
 
               <div className="pt-4">
@@ -402,10 +498,7 @@ export const SATScore = () => {
                   onClick={handleCriteriaSave}
                   disabled={saving}
                   className={`w-full px-6 py-2 rounded-lg font-medium flex items-center justify-center space-x-2 transition-all
-                    ${saving || saved
-                      ? 'bg-green-500 text-white'
-                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                    }`}
+                    ${saving || saved ? 'bg-green-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
                 >
                   {saving ? (
                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -428,10 +521,7 @@ export const SATScore = () => {
             onClick={handleSave}
             disabled={saving}
             className={`px-6 py-2 rounded-lg font-medium flex items-center space-x-2 transition-all
-              ${saving || saved
-                ? 'bg-green-500 text-white'
-                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-              }`}
+              ${saving || saved ? 'bg-green-500 text-white' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
           >
             {saving ? (
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />

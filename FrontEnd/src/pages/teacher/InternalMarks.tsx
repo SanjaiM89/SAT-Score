@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Save, AlertCircle, Search, Filter, Plus, Minus } from 'lucide-react';
 import toast from 'react-hot-toast';
+import axios from 'axios';
 
 interface Student {
   id: string;
@@ -8,6 +9,7 @@ interface Student {
   rollNumber: string;
   department: string;
   year: number;
+  subjects: Subject[];
 }
 
 interface Subject {
@@ -25,6 +27,16 @@ interface MarksData {
   };
 }
 
+interface InternalMark {
+  student_id: string;
+  subject_id: string;
+  fat1: number;
+  fat2: number;
+  fat3: number;
+  assignments: number[];
+  academic_year: string;
+}
+
 export const InternalMarks = () => {
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
   const [selectedFAT, setSelectedFAT] = useState<1 | 2 | 3>(1);
@@ -35,51 +47,89 @@ export const InternalMarks = () => {
   const [selectedDepartment, setSelectedDepartment] = useState('');
   const [selectedYear, setSelectedYear] = useState('');
   const [assignmentCount, setAssignmentCount] = useState(1);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock data - replace with actual API calls
-  const assignedSubjects: Subject[] = [
-    { id: '1', code: 'CS201', name: 'Data Structures' },
-    { id: '2', code: 'CS202', name: 'Database Systems' },
-  ];
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const timestamp = new Date().getTime();
+        const [studentsRes, subjectsRes, marksRes] = await Promise.all([
+          axios.get(`http://localhost:8000/api/students?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/subjects?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`),
+        ]);
 
-  const students: Student[] = [
-    { 
-      id: '1', 
-      name: 'Alice Johnson', 
-      rollNumber: 'CSE001',
-      department: 'Computer Science',
-      year: 2,
-    },
-    // Add more students
-  ];
+        // Map students
+        const mappedStudents = studentsRes.data.map((student: any) => ({
+          id: student.id,
+          name: student.fullName || 'Unknown',
+          rollNumber: student.registrationNumber || 'N/A',
+          department: student.department || 'N/A',
+          year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : 0,
+          subjects: student.subjects || student.courses || [],
+        }));
+
+        // Map subjects
+        const mappedSubjects = subjectsRes.data.map((subject: any) => ({
+          id: subject.id,
+          code: subject.code || 'N/A',
+          name: subject.name || 'Unknown',
+        }));
+
+        // Initialize marks
+        const initialMarks: MarksData = {};
+        marksRes.data.forEach((student: any) => {
+          student.internal_marks.forEach((mark: InternalMark) => {
+            initialMarks[mark.student_id] = initialMarks[mark.student_id] || {};
+            initialMarks[mark.student_id][mark.subject_id] = {
+              fat: mark[`fat${selectedFAT}`] || 0,
+              assignments: mark.assignments || Array(assignmentCount).fill(0),
+            };
+          });
+        });
+
+        setStudents(mappedStudents);
+        setSubjects(mappedSubjects);
+        setMarks(initialMarks);
+        setLoading(false);
+      } catch (error) {
+        console.error('Fetch error:', error);
+        toast.error('Failed to fetch data');
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [selectedFAT, assignmentCount]);
 
   const handleFATMarkChange = (studentId: string, subjectId: string, value: string) => {
     const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
-    setMarks(prev => ({
+    setMarks((prev) => ({
       ...prev,
       [studentId]: {
-        ...prev[studentId],
+        ...prev[studentId] || {},
         [subjectId]: {
           fat: numValue,
           assignments: prev[studentId]?.[subjectId]?.assignments || Array(assignmentCount).fill(0),
-        }
-      }
+        },
+      },
     }));
   };
 
   const handleAssignmentMarkChange = (studentId: string, subjectId: string, index: number, value: string) => {
     const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
-    setMarks(prev => ({
+    setMarks((prev) => ({
       ...prev,
       [studentId]: {
-        ...prev[studentId],
+        ...prev[studentId] || {},
         [subjectId]: {
           fat: prev[studentId]?.[subjectId]?.fat || 0,
-          assignments: prev[studentId]?.[subjectId]?.assignments.map((mark: number, i: number) => 
+          assignments: (prev[studentId]?.[subjectId]?.assignments || Array(assignmentCount).fill(0)).map((mark: number, i: number) =>
             i === index ? numValue : mark
-          ) || Array(assignmentCount).fill(0),
-        }
-      }
+          ),
+        },
+      },
     }));
   };
 
@@ -94,26 +144,72 @@ export const InternalMarks = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
-      // Implement API call to save marks
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!selectedSubject) {
+        toast.error('Please select a subject');
+        setSaving(false);
+        return;
+      }
+
+      const marksData = Object.entries(marks)
+        .flatMap(([studentId, subjects]) =>
+          Object.entries(subjects)
+            .filter(([subjectId]) => subjectId === selectedSubject)
+            .map(([subjectId, data]) => ({
+              student_id: studentId,
+              subject_id: subjectId,
+              fat_number: selectedFAT,
+              fat: parseFloat(data.fat.toFixed(1)),
+              assignments: data.assignments.map((a: number) => parseFloat(a.toFixed(1))),
+              academic_year: '2024-2025',
+            }))
+        )
+        .filter((mark) => mark.fat >= 0 && mark.assignments.every((a) => a >= 0));
+
+      if (!marksData.length) {
+        toast.error('No valid marks to save');
+        setSaving(false);
+        return;
+      }
+
+      console.log('Sending internal marks payload:', JSON.stringify({ marks: marksData }, null, 2));
+      await axios.post('http://localhost:8000/api/internal-marks', { marks: marksData });
       toast.success('Marks saved successfully!');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-    } catch (error) {
+
+      // Refresh marks
+      const timestamp = new Date().getTime();
+      const marksRes = await axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`);
+      const initialMarks: MarksData = {};
+      marksRes.data.forEach((student: any) => {
+        student.internal_marks.forEach((mark: InternalMark) => {
+          initialMarks[mark.student_id] = initialMarks[mark.student_id] || {};
+          initialMarks[mark.student_id][mark.subject_id] = {
+            fat: mark[`fat${selectedFAT}`] || 0,
+            assignments: mark.assignments || Array(assignmentCount).fill(0),
+          };
+        });
+      });
+      setMarks(initialMarks);
+    } catch (error: any) {
+      console.error('Save marks error:', JSON.stringify(error.response?.data || error.message, null, 2));
       toast.error('Failed to save marks');
     } finally {
       setSaving(false);
     }
   };
 
-  const filteredStudents = students.filter(student => {
-    const matchesSearch = 
+  const filteredStudents = students.filter((student) => {
+    const matchesSearch =
       student.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       student.rollNumber.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
     const matchesYear = !selectedYear || student.year === parseInt(selectedYear);
-    return matchesSearch && matchesDepartment && matchesYear;
+    const hasSubject = selectedSubject ? student.subjects.some((s) => s.id === selectedSubject) : true;
+    return matchesSearch && matchesDepartment && matchesYear && hasSubject;
   });
+
+  if (loading) return <div>Loading...</div>;
 
   return (
     <div className="space-y-8">
@@ -126,16 +222,14 @@ export const InternalMarks = () => {
         <div className="p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Select Subject
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Select Subject</label>
               <select
                 value={selectedSubject || ''}
                 onChange={(e) => setSelectedSubject(e.target.value || null)}
                 className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
               >
                 <option value="">Select a subject</option>
-                {assignedSubjects.map(subject => (
+                {subjects.map((subject) => (
                   <option key={subject.id} value={subject.id}>
                     {subject.name} ({subject.code})
                   </option>
@@ -144,9 +238,7 @@ export const InternalMarks = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                FAT
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">FAT</label>
               <div className="flex space-x-2">
                 {[1, 2, 3].map((fat) => (
                   <button
@@ -165,9 +257,7 @@ export const InternalMarks = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Assignments
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Assignments</label>
               <div className="flex items-center space-x-2">
                 <button
                   onClick={() => setAssignmentCount(Math.max(1, assignmentCount - 1))}
@@ -186,9 +276,7 @@ export const InternalMarks = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Search
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search</label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
                 <input
@@ -199,6 +287,38 @@ export const InternalMarks = () => {
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 />
               </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Department</label>
+              <select
+                value={selectedDepartment}
+                onChange={(e) => setSelectedDepartment(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">All Departments</option>
+                {[...new Set(students.map((s) => s.department))].map((dept) => (
+                  <option key={dept} value={dept}>
+                    {dept}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Year</label>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">All Years</option>
+                {[1, 2, 3, 4].map((year) => (
+                  <option key={year} value={year}>
+                    {year} Year
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -255,9 +375,7 @@ export const InternalMarks = () => {
             </div>
           ) : (
             <div className="flex items-center justify-center p-8 bg-gray-50 dark:bg-gray-700 rounded-lg">
-              <p className="text-gray-600 dark:text-gray-300">
-                Select a subject to enter marks
-              </p>
+              <p className="text-gray-600 dark:text-gray-300">Select a subject to enter marks</p>
             </div>
           )}
         </div>
@@ -277,7 +395,6 @@ export const InternalMarks = () => {
             {saving ? (
               <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : saved ? (
-              
               <AlertCircle className="w-5 h-5" />
             ) : (
               <Save className="w-5 h-5" />
