@@ -32,22 +32,38 @@ export const AdminDashboard = () => {
     const fetchStats = async () => {
       try {
         setLoading(true);
-        const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:8080';
-        const response = await fetch(`${apiUrl}/api/admin/stats`);
+        const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+        const url = `${apiUrl}/api/admin/stats`;
+        console.log('Fetching stats from:', url); // Debug log
+
+        const token = localStorage.getItem('token'); // Attempt to get token
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const response = await fetch(url, {
+          method: 'GET',
+          headers,
+        });
+
         if (!response.ok) {
-          throw new Error('Failed to fetch stats');
+          const errorText = await response.text();
+          console.error('Fetch error:', response.status, errorText); // Debug log
+          throw new Error(`Failed to fetch stats: ${response.status} ${errorText}`);
         }
+
         const data = await response.json();
+        console.log('Stats data:', data); // Debug log
+
         const updatedStats: Stat[] = [
-          { title: 'Total Teachers', value: data.totalTeachers, icon: Users, color: 'bg-blue-500' },
-          { title: 'Total Students', value: data.totalStudents, icon: GraduationCap, color: 'bg-green-500' },
-          { title: 'Subjects', value: data.subjects, icon: BookOpen, color: 'bg-purple-500' },
-          { title: 'Departments', value: data.departments, icon: Building2, color: 'bg-orange-500' },
+          { title: 'Total Teachers', value: data.totalTeachers || '0', icon: Users, color: 'bg-blue-500' },
+          { title: 'Total Students', value: data.totalStudents || '0', icon: GraduationCap, color: 'bg-green-500' },
+          { title: 'Subjects', value: data.subjects || '0', icon: BookOpen, color: 'bg-purple-500' },
+          { title: 'Departments', value: data.departments || '0', icon: Building2, color: 'bg-orange-500' },
         ];
         setStats(updatedStats);
-      } catch (err) {
-        setError('Error fetching dashboard stats');
-        toast.error('Failed to load dashboard stats');
+      } catch (err: any) {
+        console.error('Fetch stats error:', err.message); // Debug log
+        setError(`Error fetching dashboard stats: ${err.message}`);
+        toast.error(`Failed to load dashboard stats: ${err.message}`);
       } finally {
         setLoading(false);
       }
@@ -108,6 +124,8 @@ export const AdminDashboard = () => {
         <div className="text-center text-gray-600 dark:text-gray-400">Loading stats...</div>
       ) : error ? (
         <div className="text-center text-red-500">{error}</div>
+      ) : stats.length === 0 ? (
+        <div className="text-center text-gray-600 dark:text-gray-400">No stats available</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {stats.map((stat) => (

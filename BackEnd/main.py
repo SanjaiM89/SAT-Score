@@ -5,6 +5,7 @@ from admin.Student import router as student_router
 from admin.DepartmentsAndSubjects import router as department_router
 from admin.Teachers import router as teacher_router
 from admin.AssignMarks import router as marks_router
+from admin.Dashboard import router as dashboard_router
 from teacher.InternalMarks import router as internal_marks_router
 from teacher.SATMarks import router as sat_marks_router
 from auth.login import router as login_router
@@ -15,7 +16,7 @@ from starlette.middleware.errors import ServerErrorMiddleware
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)  # Reduce uvicorn access logs
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Database initialization
@@ -23,17 +24,15 @@ db = Database()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Initialize database connection
     try:
         await db.startup()
         logger.info("Database connection established")
-        app.db = db  # Set Database instance
+        app.db = db
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Failed to connect to database: {str(e)}")
         raise
     yield
-    # Shutdown: Close database connection
     try:
         await db.shutdown()
         logger.info("Database connection closed")
@@ -43,22 +42,32 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SAT Score Backend", lifespan=lifespan)
 
-# Add error middleware to log all unhandled exceptions
 app.add_middleware(
     ServerErrorMiddleware,
     debug=True
 )
 
-# CORS middleware to allow frontend requests
+# CORS middleware with explicit origins and debugging
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",  # Vite default port
+        "http://localhost:3000",  # Common React dev port
+        "http://localhost:8080",  # Additional port for testing
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
-# Include routers
+# Log CORS configuration on startup
+logger.info("CORS configured with allow_origins: %s", [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://localhost:8080",
+])
+
 try:
     app.include_router(student_router, prefix="/api")
     logger.info("Student router included successfully")
@@ -79,6 +88,11 @@ try:
     logger.info("Marks router included successfully")
 except Exception as e:
     logger.error(f"Failed to include marks_router: {str(e)}")
+try:
+    app.include_router(dashboard_router, prefix="/api")
+    logger.info("Dashboard router included successfully")
+except Exception as e:
+    logger.error(f"Failed to include dashboard_router: {str(e)}")
 try:
     app.include_router(internal_marks_router, prefix="/api")
     logger.info("Internal marks router included successfully")
