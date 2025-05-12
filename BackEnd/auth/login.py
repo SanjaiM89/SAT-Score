@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
-from database import Database
-from dependencies import get_teacher_db, get_session_id, get_current_user, oauth2_scheme
+from database import TeacherDB, StudentDB
+from dependencies import get_teacher_db, get_student_db, get_session_id, get_current_user, oauth2_scheme
 import logging
 from datetime import datetime, timedelta
 import pymongo
@@ -79,9 +79,9 @@ def create_refresh_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-async def store_refresh_token(db: Database, user_id: str, role: str, refresh_token: str):
+async def store_refresh_token(teacher_db: TeacherDB, user_id: str, role: str, refresh_token: str):
     logger.debug(f"Storing refresh token for user_id={user_id}, role={role}")
-    await db.db["refresh_tokens"].update_one(
+    await teacher_db.collection.database["refresh_tokens"].update_one(
         {"user_id": user_id, "role": role},
         {
             "$set": {
@@ -93,22 +93,30 @@ async def store_refresh_token(db: Database, user_id: str, role: str, refresh_tok
         upsert=True
     )
 
-async def store_session_id(db: Database, user_id: str, role: str, session_id: str):
+async def store_session_id(teacher_db: TeacherDB, student_db: StudentDB, user_id: str, role: str, session_id: str):
     logger.debug(f"Storing session_id for user_id={user_id}, role={role}")
-    collection = "teachers" if role == "teacher" else "students" if role == "student" else None
-    if not collection:
-        return
-    await db.db[collection].update_one(
-        {"teacherId" if role == "teacher" else "registrationNumber": user_id},
-        {
-            "$set": {
-                "session_id": session_id,
-                "session_created_at": datetime.utcnow()
+    if role == "teacher":
+        await teacher_db.collection.update_one(
+            {"teacherId": user_id},
+            {
+                "$set": {
+                    "session_id": session_id,
+                    "session_created_at": datetime.utcnow()
+                }
             }
-        }
-    )
+        )
+    elif role == "student":
+        await student_db.collection.update_one(
+            {"registrationNumber": user_id},
+            {
+                "$set": {
+                    "session_id": session_id,
+                    "session_created_at": datetime.utcnow()
+                }
+            }
+        )
 
-async def validate_refresh_token(db: Database, refresh_token: str):
+async def validate_refresh_token(teacher_db: TeacherDB, refresh_token: str):
     logger.debug(f"Validating refresh token: {refresh_token[:20]}...")
     try:
         payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -120,7 +128,7 @@ async def validate_refresh_token(db: Database, refresh_token: str):
         if not user_id or not role:
             logger.warning("Missing user_id or role in token")
             raise HTTPException(status_code=401, detail="Invalid token")
-        token_data = await db.db["refresh_tokens"].find_one({
+        token_data = await teacher_db.collection.database["refresh_tokens"].find_one({
             "user_id": user_id,
             "role": role,
             "refresh_token": refresh_token,
@@ -141,7 +149,8 @@ async def validate_refresh_token(db: Database, refresh_token: str):
 async def login(
     response: Response,
     login_data: LoginRequest,
-    db: Database = Depends(get_teacher_db)
+    teacher_db: TeacherDB = Depends(get_teacher_db),
+    student_db: StudentDB = Depends(get_student_db)
 ):
     logger.debug(f"Login attempt: role={login_data.role}, data={login_data.dict()}")
     try:
@@ -153,7 +162,7 @@ async def login(
                 raise HTTPException(status_code=401, detail="Invalid email or password")
             access_token = create_access_token(data={"role": "admin", "id": "admin"})
             refresh_token = create_refresh_token(data={"role": "admin", "id": "admin"})
-            await store_refresh_token(db, "admin", "admin", refresh_token)
+            await store_refresh_token(teacher_db, "admin", "admin", refresh_token)
             response_data = LoginResponse(
                 role="admin",
                 id="admin",
@@ -195,12 +204,12 @@ async def login(
                 raise HTTPException(status_code=400, detail="Teacher ID and name are required")
             
             logger.debug(f"Querying teacher: teacherId='{login_data.teacherId.strip()}', fullName='{login_data.teacherName.strip()}'")
-            teacher = await db.db["teachers"].find_one({
+            teacher = await teacher_db.collection.find_one({
                 "teacherId": login_data.teacherId.strip(),
                 "fullName": login_data.teacherName.strip()
             })
             if not teacher:
-                teachers = await db.db["teachers"].find({"teacherId": login_data.teacherId.strip()}).to_list(length=None)
+                teachers = await teacher_db.collection.find({"teacherId": login_data.teacherId.strip()}).to_list(length=None)
                 logger.warning(f"Teacher not found. Found teachers with teacherId='{login_data.teacherId.strip()}': {[t['fullName'] for t in teachers]}")
                 raise HTTPException(status_code=401, detail="Invalid teacher ID or name")
             
@@ -213,8 +222,8 @@ async def login(
             
             access_token = create_access_token(data={"role": "teacher", "id": login_data.teacherId})
             refresh_token = create_refresh_token(data={"role": "teacher", "id": login_data.teacherId})
-            await store_refresh_token(db, login_data.teacherId, "teacher", refresh_token)
-            await store_session_id(db, login_data.teacherId, "teacher", session_id)
+            await store_refresh_token(teacher_db, login_data.teacherId, "teacher", refresh_token)
+            await store_session_id(teacher_db, student_db, login_data.teacherId, "teacher", session_id)
             response_data = LoginResponse(
                 role="teacher",
                 id=login_data.teacherId,
@@ -255,7 +264,7 @@ async def login(
             if not login_data.studentId:
                 raise HTTPException(status_code=400, detail="Student ID is required")
             
-            student = await db.db["students"].find_one({"registrationNumber": login_data.studentId.strip()})
+            student = await student_db.collection.find_one({"registrationNumber": login_data.studentId.strip()})
             if not student:
                 logger.warning(f"Student not found: registrationNumber={login_data.studentId}")
                 raise HTTPException(status_code=401, detail="Invalid student ID")
@@ -269,8 +278,8 @@ async def login(
             
             access_token = create_access_token(data={"role": "student", "id": login_data.studentId})
             refresh_token = create_refresh_token(data={"role": "student", "id": login_data.studentId})
-            await store_refresh_token(db, login_data.studentId, "student", refresh_token)
-            await store_session_id(db, login_data.studentId, "student", session_id)
+            await store_refresh_token(teacher_db, login_data.studentId, "student", refresh_token)
+            await store_session_id(teacher_db, student_db, login_data.studentId, "student", session_id)
             response_data = LoginResponse(
                 role="student",
                 id=login_data.studentId,
@@ -317,18 +326,23 @@ async def login(
         logger.error(f"Unexpected error during login: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-@router.post("/api/refresh")
-async def refresh_token(response: Response, refresh_token: str = Depends(oauth2_scheme), db: Database = Depends(get_teacher_db)):
+@router.post("/refresh")
+async def refresh_token(
+    response: Response,
+    refresh_token: str = Depends(oauth2_scheme),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
+    student_db: StudentDB = Depends(get_student_db)
+):
     logger.debug(f"Refresh token request: token={refresh_token[:20]}...")
     try:
-        token_data = await validate_refresh_token(db, refresh_token)
+        token_data = await validate_refresh_token(teacher_db, refresh_token)
         user_id = token_data["user_id"]
         role = token_data["role"]
         session_id = str(uuid.uuid4())
         access_token = create_access_token(data={"role": role, "id": user_id})
         new_refresh_token = create_refresh_token(data={"role": role, "id": user_id})
-        await store_refresh_token(db, user_id, role, new_refresh_token)
-        await store_session_id(db, user_id, role, session_id)
+        await store_refresh_token(teacher_db, user_id, role, new_refresh_token)
+        await store_session_id(teacher_db, student_db, user_id, role, session_id)
         response.set_cookie(
             key="access_token",
             value=access_token,
@@ -367,11 +381,12 @@ async def refresh_token(response: Response, refresh_token: str = Depends(oauth2_
         logger.error(f"Unexpected error during token refresh: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-@router.post("/api/change-password", response_model=Dict[str, str])
+@router.post("/change-password", response_model=Dict[str, str])
 async def change_password(
     password_data: ChangePasswordRequest,
     current_user: dict = Depends(get_current_user),
-    db: Database = Depends(get_teacher_db)
+    teacher_db: TeacherDB = Depends(get_teacher_db),
+    student_db: StudentDB = Depends(get_student_db)
 ):
     logger.debug(f"Change password request: role={password_data.role}, id={password_data.id}")
     try:
@@ -379,11 +394,11 @@ async def change_password(
             raise HTTPException(status_code=403, detail="Unauthorized action")
         hashed_password = hash_password(password_data.newPassword)
         if password_data.role == "teacher":
-            teacher = await db.db["teachers"].find_one({"teacherId": password_data.id})
+            teacher = await teacher_db.collection.find_one({"teacherId": password_data.id})
             if not teacher:
                 logger.warning(f"Teacher not found: teacherId={password_data.id}")
                 raise HTTPException(status_code=404, detail="Teacher not found")
-            update_result = await db.db["teachers"].update_one(
+            update_result = await teacher_db.collection.update_one(
                 {"teacherId": password_data.id},
                 {
                     "$set": {
@@ -399,11 +414,11 @@ async def change_password(
             logger.info(f"Password changed for teacher: teacherId={password_data.id}")
             return {"status": "Password changed successfully"}
         elif password_data.role == "student":
-            student = await db.db["students"].find_one({"registrationNumber": password_data.id})
+            student = await student_db.collection.find_one({"registrationNumber": password_data.id})
             if not student:
                 logger.warning(f"Student not found: registrationNumber={password_data.id}")
                 raise HTTPException(status_code=404, detail="Student not found")
-            update_result = await db.db["students"].update_one(
+            update_result = await student_db.collection.update_one(
                 {"registrationNumber": password_data.id},
                 {
                     "$set": {
@@ -427,21 +442,25 @@ async def change_password(
         logger.error(f"Unexpected error during password change: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-@router.post("/api/logout")
+@router.post("/logout")
 async def logout(
     response: Response,
     current_user: dict = Depends(get_current_user),
-    db: Database = Depends(get_teacher_db)
+    teacher_db: TeacherDB = Depends(get_teacher_db),
+    student_db: StudentDB = Depends(get_student_db)
 ):
     try:
-        await db.db["refresh_tokens"].delete_many({"user_id": current_user["id"], "role": current_user["role"]})
-        await db.db["teachers"].update_one(
-            {"teacherId": current_user["id"]},
-            {"$unset": {"session_id": "", "session_created_at": ""}}
-        ) if current_user["role"] == "teacher" else await db.db["students"].update_one(
-            {"registrationNumber": current_user["id"]},
-            {"$unset": {"session_id": "", "session_created_at": ""}}
-        )
+        await teacher_db.collection.database["refresh_tokens"].delete_many({"user_id": current_user["id"], "role": current_user["role"]})
+        if current_user["role"] == "teacher":
+            await teacher_db.collection.update_one(
+                {"teacherId": current_user["id"]},
+                {"$unset": {"session_id": "", "session_created_at": ""}}
+            )
+        else:
+            await student_db.collection.update_one(
+                {"registrationNumber": current_user["id"]},
+                {"$unset": {"session_id": "", "session_created_at": ""}}
+            )
         response.delete_cookie("access_token")
         response.delete_cookie("refresh_token")
         response.delete_cookie("session_id")
@@ -451,13 +470,13 @@ async def logout(
         logger.error(f"Logout error: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to logout")
 
-@router.get("/api/check-cookie")
+@router.get("/check-cookie")
 async def check_cookie(
     session_id: str = Depends(get_session_id),
-    db: Database = Depends(get_teacher_db)
+    teacher_db: TeacherDB = Depends(get_teacher_db)
 ):
     try:
-        teacher = await db.db["teachers"].find_one({"session_id": session_id})
+        teacher = await teacher_db.collection.find_one({"session_id": session_id})
         if not teacher:
             logger.error(f"No teacher found for session_id: {session_id[:10]}...")
             raise HTTPException(status_code=403, detail="Invalid session")
@@ -473,7 +492,7 @@ async def check_cookie(
         logger.error(f"Check cookie error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.get("/api/me")
+@router.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     return {
         "role": current_user["role"],

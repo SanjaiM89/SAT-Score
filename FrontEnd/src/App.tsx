@@ -8,7 +8,7 @@ import { Dashboard as TeacherDashboard } from './pages/teacher/Dashboard';
 import { MarksEntry } from './pages/teacher/MarksEntry';
 import { SATMarks } from './pages/teacher/SATMarks';
 import { InternalMarks } from './pages/teacher/InternalMarks';
-import { StudentDashboard as StudentDashboard } from './pages/student/Dashboard';
+import { StudentDashboard } from './pages/student/Dashboard';
 import { Results } from './pages/student/Results';
 import { CGPACalculator } from './pages/student/CGPACalculator';
 import { Performance } from './pages/student/Performance';
@@ -20,7 +20,7 @@ import { SATScore } from './pages/admin/SATScore';
 import { Announcements as AdminAnnouncements } from './pages/admin/Announcements';
 import { Announcements as StudentAnnouncements } from './pages/student/Announcements';
 import { UserRole } from './types/auth';
-import { jwtDecode } from 'jwt-decode'; // ✅ Correct way for v4+
+import { jwtDecode } from 'jwt-decode';
 
 interface TokenPayload {
   role: UserRole;
@@ -31,6 +31,7 @@ interface AuthState {
   userId: string;
   role: UserRole;
   fullName: string;
+  sessionId: string;
 }
 
 const ProtectedRoute: React.FC<{
@@ -70,7 +71,7 @@ const ProtectedRoute: React.FC<{
         }
 
         // Verify token with /api/me
-        const response = await fetch('http://localhost:8000/api/me', {
+        const meResponse = await fetch('http://localhost:8000/api/me', {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -79,8 +80,8 @@ const ProtectedRoute: React.FC<{
           credentials: 'include',
         });
 
-        if (!response.ok) {
-          console.error(`[${new Date().toISOString()}] ProtectedRoute: /api/me failed:`, await response.text());
+        if (!meResponse.ok) {
+          console.error(`[${new Date().toISOString()}] ProtectedRoute: /api/me failed:`, await meResponse.text());
           localStorage.removeItem('auth');
           localStorage.removeItem('token');
           setAuth(null);
@@ -88,11 +89,32 @@ const ProtectedRoute: React.FC<{
           return;
         }
 
-        const data = await response.json();
-        console.log(`[${new Date().toISOString()}] ProtectedRoute: /api/me response:`, JSON.stringify(data, null, 2));
+        const meData = await meResponse.json();
+        console.log(`[${new Date().toISOString()}] ProtectedRoute: /api/me response:`, JSON.stringify(meData, null, 2));
 
-        if (data.role !== parsedAuth.role || data.id !== parsedAuth.userId) {
-          console.warn(`[${new Date().toISOString()}] ProtectedRoute: Server auth mismatch`);
+        // Verify session with /api/check-cookie
+        const cookieResponse = await fetch('http://localhost:8000/api/check-cookie', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        });
+
+        if (!cookieResponse.ok) {
+          console.error(`[${new Date().toISOString()}] ProtectedRoute: /api/check-cookie failed:`, await cookieResponse.text());
+          localStorage.removeItem('auth');
+          localStorage.removeItem('token');
+          setAuth(null);
+          setLoading(false);
+          return;
+        }
+
+        const cookieData = await cookieResponse.json();
+        console.log(`[${new Date().toISOString()}] ProtectedRoute: /api/check-cookie response:`, JSON.stringify(cookieData, null, 2));
+
+        if (meData.role !== parsedAuth.role || meData.id !== parsedAuth.userId || cookieData.session_id !== parsedAuth.sessionId) {
+          console.warn(`[${new Date().toISOString()}] ProtectedRoute: Server auth or session mismatch`);
           localStorage.removeItem('auth');
           localStorage.removeItem('token');
           setAuth(null);
@@ -128,6 +150,21 @@ const ProtectedRoute: React.FC<{
   return <>{children}</>;
 };
 
+// Component to dynamically select the dashboard based on role
+const DashboardHome: React.FC = () => {
+  const auth = JSON.parse(localStorage.getItem('auth') || '{}') as AuthState;
+  switch (auth.role) {
+    case 'admin':
+      return <AdminDashboard />;
+    case 'teacher':
+      return <TeacherDashboard />;
+    case 'student':
+      return <StudentDashboard />;
+    default:
+      return <Navigate to="/login" replace />;
+  }
+};
+
 const router = createBrowserRouter([
   {
     path: '/login',
@@ -153,35 +190,9 @@ const router = createBrowserRouter([
         path: 'home',
         element: (
           <ProtectedRoute allowedRoles={['admin', 'teacher', 'student']}>
-            <Outlet />
+            <DashboardHome />
           </ProtectedRoute>
         ),
-        children: [
-          {
-            index: true,
-            element: (
-              <ProtectedRoute allowedRoles={['admin']}>
-                <AdminDashboard />
-              </ProtectedRoute>
-            ),
-          },
-          {
-            path: '/dashboard/home',
-            element: (
-              <ProtectedRoute allowedRoles={['teacher']}>
-                <TeacherDashboard />
-              </ProtectedRoute>
-            ),
-          },
-          {
-            path: '/dashboard/home',
-            element: (
-              <ProtectedRoute allowedRoles={['student']}>
-                <StudentDashboard />
-              </ProtectedRoute>
-            ),
-          },
-        ],
       },
       {
         path: 'marks-entry',
@@ -288,7 +299,7 @@ const router = createBrowserRouter([
             ),
           },
           {
-            path: '/dashboard/announcements',
+            path: '',
             element: (
               <ProtectedRoute allowedRoles={['student']}>
                 <StudentAnnouncements />
