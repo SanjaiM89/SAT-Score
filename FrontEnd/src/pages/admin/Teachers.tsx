@@ -34,15 +34,35 @@ export const Teachers = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
+        const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+        const token = localStorage.getItem('token');
+        if (!token) {
+          throw new Error('No authentication token found');
+        }
+
         const [teachersRes, deptsRes] = await Promise.all([
-          axios.get('http://localhost:8000/api/teachers'),
-          axios.get('http://localhost:8000/api/departments')
+          axios.get(`${apiUrl}/api/teachers`, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+          }),
+          axios.get(`${apiUrl}/api/departments`, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+          }),
         ]);
         setTeachers(teachersRes.data);
         setDepartments(deptsRes.data);
         setLoading(false);
-      } catch (error) {
-        toast.error('Failed to fetch data');
+      } catch (error: any) {
+        console.error('Fetch data error:', error);
+        const errorMessage = error.response?.data?.detail || error.message || 'Failed to fetch data';
+        toast.error(errorMessage);
         setLoading(false);
       }
     };
@@ -51,19 +71,42 @@ export const Teachers = () => {
 
   const handleAddTeacher = async (teacherData: any) => {
     try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      let response;
       if (editingTeacher) {
-        const response = await axios.put(`http://localhost:8000/api/teachers/${editingTeacher.id}`, teacherData);
+        response = await axios.put(`${apiUrl}/api/teachers/${editingTeacher.id}`, teacherData, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        });
         setTeachers(prev => prev.map(t => (t.id === editingTeacher.id ? response.data : t)));
         toast.success('Teacher updated successfully!');
       } else {
-        const response = await axios.post('http://localhost:8000/api/teachers', teacherData);
+        response = await axios.post(`${apiUrl}/api/teachers`, teacherData, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        });
         setTeachers(prev => [...prev, response.data]);
-        toast.success('Teacher added successfully!');
+        toast.success(`Teacher added successfully! ID: ${response.data.teacherId}`);
       }
       setIsModalOpen(false);
       setEditingTeacher(null);
-    } catch (error) {
-      toast.error('Failed to save teacher');
+      return response.data; // Return data for AddTeacherModal
+    } catch (error: any) {
+      console.error('Add/Edit teacher error:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Failed to save teacher';
+      toast.error(errorMessage);
+      throw error; // Rethrow for AddTeacherModal to handle
     }
   };
 
@@ -74,26 +117,40 @@ export const Teachers = () => {
 
   const handleDeleteTeacher = async (teacherId: string) => {
     try {
-      await axios.delete(`http://localhost:8000/api/teachers/${teacherId}`);
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      await axios.delete(`${apiUrl}/api/teachers/${teacherId}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
       setTeachers(prev => prev.filter(teacher => teacher.id !== teacherId));
       toast.success('Teacher removed successfully!');
-    } catch (error) {
-      toast.error('Failed to delete teacher');
+    } catch (error: any) {
+      console.error('Delete teacher error:', error);
+      const errorMessage = error.response?.data?.detail || error.message || 'Failed to delete teacher';
+      toast.error(errorMessage);
     }
   };
 
   const filteredTeachers = teachers.filter(teacher => {
-    const matchesSearch = 
+    const matchesSearch =
       teacher.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       teacher.teacherId.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesDepartment = !selectedDepartment || teacher.department === selectedDepartment;
     return matchesSearch && matchesDepartment;
   });
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div className="text-center text-gray-600 dark:text-gray-400">Loading...</div>;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 p-6">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Teachers</h1>
@@ -179,7 +236,7 @@ export const Teachers = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {filteredTeachers.map((teacher) => (
+                    {filteredTeachers.map(teacher => (
                       <tr key={teacher.id}>
                         <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.teacherId}</td>
                         <td className="py-4 text-sm text-gray-900 dark:text-white">{teacher.fullName}</td>
@@ -191,7 +248,7 @@ export const Teachers = () => {
                         </td>
                         <td className="py-4">
                           <div className="flex flex-wrap gap-2">
-                            {teacher.subjectsHandled.map((subject) => (
+                            {teacher.subjectsHandled.map(subject => (
                               <span
                                 key={subject.id}
                                 className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/20 dark:text-blue-300 rounded-full"

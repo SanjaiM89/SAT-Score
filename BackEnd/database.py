@@ -3,10 +3,11 @@ from bson import ObjectId
 from typing import Dict, Any, Optional, List
 import logging
 import base64
+from datetime import date, datetime
 from AddStudentModel import AddStudentModel
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def sanitize_string(value: Any) -> str:
@@ -28,24 +29,43 @@ def sanitize_string(value: Any) -> str:
             logger.warning(f"Failed to convert to string: {value}, error: {str(e)}")
             return ""
     try:
-        # Ensure string is UTF-8 compliant
         return value.encode('utf-8', errors='replace').decode('utf-8')
     except Exception as e:
         logger.warning(f"Invalid UTF-8 string: {value[:50]}, error: {str(e)}")
         return ""
 
 class Database:
-    def __init__(self):
+    def __init__(self, db: AsyncIOMotorDatabase = None):
         self.client: Optional[AsyncIOMotorClient] = None
-        self.db: Optional[AsyncIOMotorDatabase] = None
+        self.db: Optional[AsyncIOMotorDatabase] = db
         self.MONGODB_URL = "mongodb://localhost:27017"
         self.DATABASE_NAME = "satscore"
+        self.collection = {
+            "db.teachers": self.db["db.teachers"] if self.db is not None else None,
+            "db.students": self.db["db.students"] if self.db is not None else None,
+            "db.departments": self.db["db.departments"] if self.db is not None else None,
+            "db.subjects": self.db["db.subjects"] if self.db is not None else None,
+            "db.refresh_tokens": self.db["db.refresh_tokens"] if self.db is not None else None,
+            "mark_criteria": self.db["mark_criteria"] if self.db is not None else None,
+            "marks": self.db["marks"] if self.db is not None else None,
+        }
 
     async def startup(self):
         try:
-            self.client = AsyncIOMotorClient(self.MONGODB_URL)
-            self.db = self.client[self.DATABASE_NAME]
+            if self.db is None:
+                self.client = AsyncIOMotorClient(self.MONGODB_URL)
+                self.db = self.client[self.DATABASE_NAME]
+                self.collection = {
+                    "db.teachers": self.db["db.teachers"],
+                    "db.students": self.db["db.students"],
+                    "db.departments": self.db["db.departments"],
+                    "db.subjects": self.db["db.subjects"],
+                    "db.refresh_tokens": self.db["db.refresh_tokens"],
+                    "mark_criteria": self.db["mark_criteria"],
+                    "marks": self.db["marks"],
+                }
             logger.info(f"MongoDB connection established to {self.DATABASE_NAME} database")
+            await self.db.command("ping")
         except Exception as e:
             logger.error(f"Failed to connect to MongoDB: {str(e)}")
             raise
@@ -57,7 +77,7 @@ class Database:
 
 class StudentDB:
     def __init__(self, db: AsyncIOMotorDatabase):
-        self.collection = db["students"]
+        self.collection = db["db.students"]
         self.department_collection = db["db.departments"]
         self.subject_collection = db["db.subjects"]
 
@@ -100,7 +120,6 @@ class StudentDB:
             student_data["registrationNumber"] = registration_number
             student_data["department"] = ObjectId(student_data["department"])
             
-            # Automatically assign courses based on department, year, and semester
             courses = await self.get_applicable_courses(
                 student_data["department"],
                 student_data["yearOfStudy"],
@@ -149,7 +168,6 @@ class StudentDB:
         try:
             students = []
             async for student in self.collection.find({}, {"fileContent": 0, "photo": 0}):
-                # Fetch course details for each student
                 courses = []
                 if student.get("courses"):
                     async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in student["courses"]]}}):
@@ -183,7 +201,6 @@ class StudentDB:
             student = await self.collection.find_one({"_id": ObjectId(id)}, {"fileContent": 0, "photo": 0})
             if not student:
                 return None
-            # Fetch course details
             courses = []
             if student.get("courses"):
                 async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in student["courses"]]}}):
@@ -222,7 +239,6 @@ class StudentDB:
                 raise ValueError(f"Student with ID {id} not found")
             updated_student = await self.collection.find_one({"_id": ObjectId(id)}, {"fileContent": 0})
             if updated_student:
-                # Fetch course details
                 courses = []
                 if updated_student.get("courses"):
                     async for subject in self.subject_collection.find({"_id": {"$in": [ObjectId(cid) for cid in updated_student["courses"]]}}):
@@ -255,11 +271,9 @@ class StudentDB:
             if not student:
                 raise ValueError(f"Student with ID {id} not found")
             result = await self.collection.delete_one({"_id": ObjectId(id)})
-            # Attempt to update department's totalStudents
             try:
                 department_id = student.get("department")
                 if department_id:
-                    # Validate department_id as ObjectId
                     try:
                         dept_object_id = ObjectId(department_id)
                         dept = await self.department_collection.find_one({"_id": dept_object_id})
@@ -277,7 +291,6 @@ class StudentDB:
                     logger.warning(f"No department ID found for student {id}")
             except Exception as e:
                 logger.error(f"Failed to update department for student {id}: {str(e)}")
-                # Continue with deletion despite department update failure
             logger.info(f"Student deleted with ID: {id}")
             return {"id": id, "status": "deleted"}
         except Exception as e:
@@ -470,4 +483,338 @@ class SubjectDB:
             return {"id": id, "status": "deleted"}
         except Exception as e:
             logger.error(f"Error deleting subject {id}: {str(e)}")
+            raise
+
+class TeacherDB:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.collection = db["db.teachers"]
+        self.department_collection = db["db.departments"]
+
+    async def create_teacher(self, teacher: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            teacher_data = teacher.copy()  # Create a copy to avoid modifying input
+            if "department" in teacher_data:
+                # Expect department to be an ObjectId string from Teachers.py
+                teacher_data["department"] = ObjectId(teacher_data["department"])
+            # subjectsHandled should already be validated by Teachers.py, so no ObjectId conversion
+            # Ensure teacherId is included
+            if not teacher_data.get("teacherId"):
+                raise ValueError("teacherId is required")
+            # Convert string-based date fields to datetime objects
+            for date_field in ["dateOfBirth", "joiningDate", "last_login"]:
+                if date_field in teacher_data and isinstance(teacher_data[date_field], str):
+                    try:
+                        teacher_data[date_field] = datetime.fromisoformat(teacher_data[date_field].replace('Z', '+00:00'))
+                    except ValueError as e:
+                        logger.warning(f"Invalid date format for {date_field}: {teacher_data[date_field]}, error: {str(e)}")
+            result = await self.collection.insert_one(teacher_data)
+            teacher_id = str(result.inserted_id)
+            inserted_teacher = await self.collection.find_one({"_id": ObjectId(teacher_id)})
+            if inserted_teacher:
+                sanitized_teacher = {}
+                for key, value in inserted_teacher.items():
+                    if key == "_id":
+                        sanitized_teacher["id"] = str(value)
+                    elif key == "department":
+                        sanitized_teacher[key] = sanitize_string(value)
+                    elif key == "subjectsHandled":
+                        sanitized_teacher[key] = [
+                            {
+                                "subject_id": sanitize_string(assignment["subject_id"]),
+                                "batch": sanitize_string(assignment.get("batch", "")),
+                                "section": sanitize_string(assignment.get("section", ""))
+                            }
+                            for assignment in value
+                        ]
+                    elif isinstance(value, datetime):
+                        sanitized_teacher[key] = value.isoformat()
+                    else:
+                        sanitized_teacher[key] = sanitize_string(value)
+                logger.info(f"Teacher created with ID: {teacher_id}, teacherId: {teacher_data['teacherId']}")
+                return sanitized_teacher
+            raise ValueError("Failed to retrieve inserted teacher")
+        except Exception as e:
+            logger.error(f"Error creating teacher: {str(e)}")
+            raise
+
+    async def get_teachers(self) -> List[Dict[str, Any]]:
+        try:
+            teachers = []
+            async for teacher in self.collection.find():
+                sanitized_teacher = {}
+                for key, value in teacher.items():
+                    if key == "_id":
+                        sanitized_teacher["id"] = str(value)
+                    elif key == "department":
+                        sanitized_teacher[key] = sanitize_string(value)
+                    elif key == "subjectsHandled":
+                        sanitized_teacher[key] = [
+                            {
+                                "subject_id": sanitize_string(assignment["subject_id"]),
+                                "batch": sanitize_string(assignment.get("batch", "")),
+                                "section": sanitize_string(assignment.get("section", ""))
+                            }
+                            for assignment in value
+                        ]
+                    elif isinstance(value, datetime):
+                        sanitized_teacher[key] = value.isoformat()
+                    else:
+                        sanitized_teacher[key] = sanitize_string(value)
+                teachers.append(sanitized_teacher)
+            logger.info(f"Retrieved {len(teachers)} teachers via API")
+            return teachers
+        except Exception as e:
+            logger.error(f"Error retrieving teachers: {str(e)}")
+            raise
+
+    async def get_teacher(self, id: str) -> Optional[Dict[str, Any]]:
+        try:
+            teacher = await self.collection.find_one({"teacherId": id})
+            if teacher:
+                sanitized_teacher = {}
+                for key, value in teacher.items():
+                    if key == "_id":
+                        sanitized_teacher["id"] = str(value)
+                    elif key == "department":
+                        sanitized_teacher[key] = sanitize_string(value)
+                    elif key == "subjectsHandled":
+                        sanitized_teacher[key] = [
+                            {
+                                "subject_id": sanitize_string(assignment["subject_id"]),
+                                "batch": sanitize_string(assignment.get("batch", "")),
+                                "section": sanitize_string(assignment.get("section", ""))
+                            }
+                            for assignment in value
+                        ]
+                    elif isinstance(value, datetime):
+                        sanitized_teacher[key] = value.isoformat()
+                    else:
+                        sanitized_teacher[key] = sanitize_string(value)
+                logger.info(f"Retrieved teacher: {id}")
+                return sanitized_teacher
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving teacher {id}: {str(e)}")
+            raise
+
+    async def update_teacher(self, id: str, teacher: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            teacher_data = teacher.copy()
+            if "department" in teacher_data:
+                teacher_data["department"] = ObjectId(teacher_data["department"])
+            # subjectsHandled should already be validated by Teachers.py, so no ObjectId conversion
+            # Convert string-based date fields to datetime objects
+            for date_field in ["dateOfBirth", "joiningDate", "last_login"]:
+                if date_field in teacher_data and isinstance(teacher_data[date_field], str):
+                    try:
+                        teacher_data[date_field] = datetime.fromisoformat(teacher_data[date_field].replace('Z', '+00:00'))
+                    except ValueError as e:
+                        logger.warning(f"Invalid date format for {date_field}: {teacher_data[date_field]}, error: {str(e)}")
+            result = await self.collection.update_one(
+                {"_id": ObjectId(id)},
+                {"$set": teacher_data}
+            )
+            if result.matched_count == 0:
+                raise ValueError(f"Teacher with ID {id} not found")
+            updated_teacher = await self.collection.find_one({"_id": ObjectId(id)})
+            if updated_teacher:
+                sanitized_teacher = {}
+                for key, value in updated_teacher.items():
+                    if key == "_id":
+                        sanitized_teacher["id"] = str(value)
+                    elif key == "department":
+                        sanitized_teacher[key] = sanitize_string(value)
+                    elif key == "subjectsHandled":
+                        sanitized_teacher[key] = [
+                            {
+                                "subject_id": sanitize_string(assignment["subject_id"]),
+                                "batch": sanitize_string(assignment.get("batch", "")),
+                                "section": sanitize_string(assignment.get("section", ""))
+                            }
+                            for assignment in value
+                        ]
+                    elif isinstance(value, datetime):
+                        sanitized_teacher[key] = value.isoformat()
+                    else:
+                        sanitized_teacher[key] = sanitize_string(value)
+                logger.info(f"Teacher updated with ID: {id}")
+                return sanitized_teacher
+            raise ValueError("Failed to retrieve updated teacher")
+        except Exception as e:
+            logger.error(f"Error updating teacher {id}: {str(e)}")
+            raise
+
+    async def delete_teacher(self, id: str) -> Dict[str, Any]:
+        try:
+            result = await self.collection.delete_one({"_id": ObjectId(id)})
+            if result.deleted_count == 0:
+                raise ValueError(f"Teacher with ID {id} not found")
+            logger.info(f"Teacher deleted with ID: {id}")
+            return {"id": id, "status": "deleted"}
+        except Exception as e:
+            logger.error(f"Error deleting teacher {id}: {str(e)}")
+            raise
+
+class MarkCriteriaDB:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.collection = db["mark_criteria"]
+
+    async def create_mark_criteria(self, criteria: Any) -> Dict[str, Any]:
+        try:
+            criteria_data = criteria.dict()
+            result = await self.collection.insert_one(criteria_data)
+            criteria_id = str(result.inserted_id)
+            inserted_criteria = await self.collection.find_one({"_id": ObjectId(criteria_id)})
+            if inserted_criteria:
+                inserted_criteria["id"] = str(inserted_criteria["_id"])
+                del inserted_criteria["_id"]
+            logger.info(f"Mark criteria created with ID: {criteria_id}")
+            return inserted_criteria
+        except Exception as e:
+            logger.error(f"Error creating mark criteria: {str(e)}")
+            raise
+
+    async def get_mark_criteria(self) -> List[Dict[str, Any]]:
+        try:
+            criteria = []
+            async for crit in self.collection.find():
+                crit["id"] = str(crit["_id"])
+                del crit["_id"]
+                criteria.append(crit)
+            logger.info(f"Retrieved {len(criteria)} mark criteria via API")
+            return criteria
+        except Exception as e:
+            logger.error(f"Error retrieving mark criteria: {str(e)}")
+            raise
+
+    async def get_mark_criterion(self, id: str) -> Optional[Dict[str, Any]]:
+        try:
+            crit = await self.collection.find_one({"_id": ObjectId(id)})
+            if crit:
+                crit["id"] = str(crit["_id"])
+                del crit["_id"]
+                return crit
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving mark criterion {id}: {str(e)}")
+            raise
+
+    async def update_mark_criterion(self, id: str, criteria: Any) -> Dict[str, Any]:
+        try:
+            criteria_data = criteria.dict()
+            result = await self.collection.update_one(
+                {"_id": ObjectId(id)},
+                {"$set": criteria_data}
+            )
+            if result.matched_count == 0:
+                raise ValueError(f"Mark criterion with ID {id} not found")
+            updated_criterion = await self.collection.find_one({"_id": ObjectId(id)})
+            if updated_criterion:
+                updated_criterion["id"] = str(updated_criterion["_id"])
+                del updated_criterion["_id"]
+            logger.info(f"Mark criterion updated with ID: {id}")
+            return updated_criterion
+        except Exception as e:
+            logger.error(f"Error updating mark criterion {id}: {str(e)}")
+            raise
+
+    async def delete_mark_criterion(self, id: str) -> Dict[str, Any]:
+        try:
+            result = await self.collection.delete_one({"_id": ObjectId(id)})
+            if result.deleted_count == 0:
+                raise ValueError(f"Mark criterion with ID {id} not found")
+            logger.info(f"Mark criterion deleted with ID: {id}")
+            return {"id": id, "status": "deleted"}
+        except Exception as e:
+            logger.error(f"Error deleting mark criterion {id}: {str(e)}")
+            raise
+
+class MarksDB:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.collection = db["marks"]
+        self.student_collection = db["db.students"]
+        self.subject_collection = db["db.subjects"]
+
+    async def create_mark(self, mark: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            # Use the dictionary directly, no .dict() call
+            mark_data = mark.copy()  # Create a copy to avoid modifying the input
+            mark_data["student"] = ObjectId(mark_data["student"])
+            mark_data["subject"] = ObjectId(mark_data["subject"])
+            mark_data["created_at"] = date.today().isoformat() if "created_at" not in mark_data else mark_data["created_at"]
+            result = await self.collection.insert_one(mark_data)
+            mark_id = str(result.inserted_id)
+            inserted_mark = await self.collection.find_one({"_id": ObjectId(mark_id)})
+            if inserted_mark:
+                inserted_mark["id"] = str(inserted_mark["_id"])
+                del inserted_mark["_id"]
+                inserted_mark["student"] = sanitize_string(inserted_mark["student"])
+                inserted_mark["subject"] = sanitize_string(inserted_mark["subject"])
+            logger.info(f"Mark created with ID: {mark_id}")
+            return inserted_mark
+        except Exception as e:
+            logger.error(f"Error creating mark: {str(e)}")
+            raise
+
+    async def get_marks(self) -> List[Dict[str, Any]]:
+        try:
+            marks = []
+            async for mark in self.collection.find():
+                mark["id"] = str(mark["_id"])
+                del mark["_id"]
+                mark["student"] = sanitize_string(mark["student"])
+                mark["subject"] = sanitize_string(mark["subject"])
+                marks.append(mark)
+            logger.info(f"Retrieved {len(marks)} marks via API")
+            return marks
+        except Exception as e:
+            logger.error(f"Error retrieving marks: {str(e)}")
+            raise
+
+    async def get_mark(self, id: str) -> Optional[Dict[str, Any]]:
+        try:
+            mark = await self.collection.find_one({"_id": ObjectId(id)})
+            if mark:
+                mark["id"] = str(mark["_id"])
+                del mark["_id"]
+                mark["student"] = sanitize_string(mark["student"])
+                mark["subject"] = sanitize_string(mark["subject"])
+                return mark
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving mark {id}: {str(e)}")
+            raise
+
+    async def update_mark(self, id: str, mark: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            mark_data = mark.copy()
+            mark_data["student"] = ObjectId(mark_data["student"])
+            mark_data["subject"] = ObjectId(mark_data["subject"])
+            result = await self.collection.update_one(
+                {"_id": ObjectId(id)},
+                {"$set": mark_data}
+            )
+            if result.matched_count == 0:
+                raise ValueError(f"Mark with ID {id} not found")
+            updated_mark = await self.collection.find_one({"_id": ObjectId(id)})
+            if updated_mark:
+                updated_mark["id"] = str(updated_mark["_id"])
+                del updated_mark["_id"]
+                updated_mark["student"] = sanitize_string(updated_mark["student"])
+                updated_mark["subject"] = sanitize_string(updated_mark["subject"])
+            logger.info(f"Mark updated with ID: {id}")
+            return updated_mark
+        except Exception as e:
+            logger.error(f"Error updating mark {id}: {str(e)}")
+            raise
+
+    async def delete_mark(self, id: str) -> Dict[str, Any]:
+        try:
+            result = await self.collection.delete_one({"_id": ObjectId(id)})
+            if result.deleted_count == 0:
+                raise ValueError(f"Mark with ID {id} not found")
+            logger.info(f"Mark deleted with ID: {id}")
+            return {"id": id, "status": "deleted"}
+        except Exception as e:
+            logger.error(f"Error deleting mark {id}: {str(e)}")
             raise

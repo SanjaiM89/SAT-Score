@@ -18,7 +18,7 @@ interface Student {
   yearOfStudy?: string;
   subjects: Subject[];
   courses?: Subject[];
-  marks?: { [subjectId: string]: number } | string; // Handle string or object
+  marks?: { [subjectId: string]: number } | string;
 }
 
 interface MarksData {
@@ -59,15 +59,21 @@ export const SATScore = () => {
     const fetchData = async () => {
       try {
         const timestamp = new Date().getTime();
+        const token = localStorage.getItem('token'); // Adjust based on your auth mechanism
         const [studentsRes, criteriaRes, deptsRes] = await Promise.all([
-          axios.get(`http://localhost:8000/api/students?t=${timestamp}`),
-          axios.get(`http://localhost:8000/api/mark-criteria?t=${timestamp}`),
-          axios.get(`http://localhost:8000/api/departments?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/students?t=${timestamp}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          axios.get(`http://localhost:8000/api/mark-criteria?t=${timestamp}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          axios.get(`http://localhost:8000/api/departments?t=${timestamp}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
         ]);
         console.log('Raw /api/students response:', JSON.stringify(studentsRes.data, null, 2));
         console.log('Raw /api/departments response:', JSON.stringify(deptsRes.data, null, 2));
 
-        // Initialize marks state from fetched data
         const initialMarks: MarksData = {};
         const mappedStudents = studentsRes.data.map((student: any) => {
           let studentMarks: { [subjectId: string]: number } = {};
@@ -91,7 +97,9 @@ export const SATScore = () => {
             fullName: student.fullName || 'Unknown',
             registrationNumber: student.registrationNumber || 'N/A',
             department: student.department || 'N/A',
-            year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : null,
+            year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy))
+              ? parseInt(student.yearOfStudy)
+              : null,
             yearOfStudy: student.yearOfStudy || 'N/A',
             subjects: student.courses || student.subjects || [],
             marks: studentMarks,
@@ -145,7 +153,7 @@ export const SATScore = () => {
       const marksData = Object.entries(marks)
         .flatMap(([studentId, subjects]) =>
           Object.entries(subjects)
-            .filter(([_, data]) => data.final != null && !isNaN(data.final)) // Skip null or invalid finals
+            .filter(([_, data]) => data.final != null && !isNaN(data.final) && data.final >= 0 && data.final <= 100)
             .map(([subjectId, data]) => ({
               student_id: studentId,
               subject_id: subjectId,
@@ -154,10 +162,20 @@ export const SATScore = () => {
             }))
         )
         .filter((mark) => {
-          // Validate subject_id is a valid ObjectId (24-character hex string)
-          const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(mark.subject_id);
-          if (!isValidObjectId) {
+          // Validate ObjectIds (24-character hex strings)
+          const isValidStudentId = /^[0-9a-fA-F]{24}$/.test(mark.student_id);
+          const isValidSubjectId = /^[0-9a-fA-F]{24}$/.test(mark.subject_id);
+          if (!isValidStudentId) {
+            console.warn(`Skipping invalid student_id: ${mark.student_id}`);
+            return false;
+          }
+          if (!isValidSubjectId) {
             console.warn(`Skipping invalid subject_id: ${mark.subject_id}`);
+            return false;
+          }
+          // Validate academic_year
+          if (!mark.academic_year || typeof mark.academic_year !== 'string') {
+            console.warn(`Skipping invalid academic_year: ${mark.academic_year}`);
             return false;
           }
           return true;
@@ -170,12 +188,18 @@ export const SATScore = () => {
       }
 
       console.log('Sending marks payload:', JSON.stringify({ marks: marksData }, null, 2));
-      await axios.post('http://localhost:8000/api/marks', { marks: marksData });
+      const token = localStorage.getItem('token'); // Adjust based on your auth mechanism
+      const response = await axios.post('http://localhost:8000/api/marks', { marks: marksData }, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       toast.success('Marks saved successfully!');
+      console.log('Marks saved response:', response.data);
 
       // Refresh students to update marks
       const timestamp = new Date().getTime();
-      const studentsRes = await axios.get(`http://localhost:8000/api/students?t=${timestamp}`);
+      const studentsRes = await axios.get(`http://localhost:8000/api/students?t=${timestamp}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       const initialMarks: MarksData = {};
       const mappedStudents = studentsRes.data.map((student: any) => {
         let studentMarks: { [subjectId: string]: number } = {};
@@ -199,7 +223,9 @@ export const SATScore = () => {
           fullName: student.fullName || 'Unknown',
           registrationNumber: student.registrationNumber || 'N/A',
           department: student.department || 'N/A',
-          year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : null,
+          year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy))
+            ? parseInt(student.yearOfStudy)
+            : null,
           yearOfStudy: student.yearOfStudy || 'N/A',
           subjects: student.courses || student.subjects || [],
           marks: studentMarks,
@@ -212,8 +238,9 @@ export const SATScore = () => {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error: any) {
-      console.error('Save marks error:', JSON.stringify(error.response?.data || error.message, null, 2));
-      toast.error('Failed to save marks');
+      const errorMessage = error.response?.data?.detail || error.message;
+      console.error('Save marks error:', JSON.stringify(errorMessage, null, 2));
+      toast.error(`Failed to save marks: ${errorMessage}`);
       setSaving(false);
     }
   };
@@ -221,7 +248,10 @@ export const SATScore = () => {
   const handleCriteriaSave = async () => {
     setSaving(true);
     try {
-      await axios.post('http://localhost:8000/api/mark-criteria', markCriteria);
+      const token = localStorage.getItem('token'); // Adjust based on your auth mechanism
+      await axios.post('http://localhost:8000/api/mark-criteria', markCriteria, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       toast.success('Mark criteria saved successfully!');
       setSaving(false);
       setSaved(true);
@@ -239,7 +269,11 @@ export const SATScore = () => {
         (student.fullName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         (student.registrationNumber || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchesDepartment = !selectedDepartment || student.department === selectedDepartment;
-      const year = student.year !== undefined && student.year !== null ? student.year : student.yearOfStudy ? parseInt(student.yearOfStudy) : undefined;
+      const year = student.year !== undefined && student.year !== null
+        ? student.year
+        : student.yearOfStudy
+          ? parseInt(student.yearOfStudy)
+          : undefined;
       const matchesYear = !selectedYear || (year && year === parseInt(selectedYear));
       return matchesSearch && matchesDepartment && matchesYear;
     })
@@ -263,7 +297,11 @@ export const SATScore = () => {
   };
 
   const formatYear = (student: Student) => {
-    const year = student.year !== undefined && student.year !== null ? student.year : student.yearOfStudy ? parseInt(student.yearOfStudy) : undefined;
+    const year = student.year !== undefined && student.year !== null
+      ? student.year
+      : student.yearOfStudy
+        ? parseInt(student.yearOfStudy)
+        : undefined;
     if (!year) return 'N/A';
     const suffixes = { 1: 'st', 2: 'nd', 3: 'rd' };
     const suffix = suffixes[year as keyof typeof suffixes] || 'th';

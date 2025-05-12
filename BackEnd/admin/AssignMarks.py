@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Union
 from bson import ObjectId
-from database import StudentDB, DepartmentDB, SubjectDB
-from dependencies import get_student_db, get_department_db, get_subject_db
+from database import StudentDB, DepartmentDB, SubjectDB, MarkCriteriaDB, MarksDB
+from dependencies import get_student_db, get_department_db, get_subject_db, get_mark_criteria_db, get_marks_db
 import logging
 from datetime import date
 
@@ -191,7 +191,8 @@ async def get_students(
 async def save_marks(
     marks_data: MarksData,
     student_db: StudentDB = Depends(get_student_db),
-    subject_db: SubjectDB = Depends(get_subject_db)
+    subject_db: SubjectDB = Depends(get_subject_db),
+    marks_db: MarksDB = Depends(get_marks_db)
 ):
     logger.debug(f"Received marks payload: {marks_data.dict()}")
     saved_count = 0
@@ -202,6 +203,7 @@ async def save_marks(
 
         for index, mark in enumerate(marks_data.marks):
             try:
+                logger.debug(f"Processing mark entry {index}: {mark.dict()}")
                 # Validate student_id
                 if not is_valid_object_id(mark.student_id):
                     errors.append(f"Entry {index}: Invalid student_id format: {mark.student_id}")
@@ -250,22 +252,18 @@ async def save_marks(
                     errors.append(f"Entry {index}: Subject {mark.subject_id} (Code: {subject.get('code', 'N/A')}) not assigned to student {mark.student_id}")
                     continue
 
-                # Update marks in students collection
-                update_result = await student_db.collection.update_one(
-                    {"_id": student_oid},
-                    {
-                        "$set": {
-                            f"marks.{mark.subject_id}": float(mark.final),
-                            "updated_at": date.today().isoformat()
-                        }
-                    }
-                )
-
-                if update_result.modified_count > 0 or update_result.matched_count > 0:
-                    saved_count += 1
-                    logger.info(f"Saved mark for Student: {mark.student_id}, Subject: {mark.subject_id}, Final: {mark.final}")
-                else:
-                    errors.append(f"Entry {index}: Failed to save mark for Student: {mark.student_id}, Subject: {mark.subject_id}")
+                # Save mark in marks collection
+                mark_data = {
+                    "student": student_oid,
+                    "subject": subject_oid,
+                    "final": float(mark.final),
+                    "academic_year": mark.academic_year,
+                    "created_at": date.today().isoformat()
+                }
+                logger.debug(f"Saving mark data: {mark_data}")
+                result = await marks_db.create_mark(mark_data)
+                saved_count += 1
+                logger.info(f"Saved mark for Student: {mark.student_id}, Subject: {mark.subject_id}, Final: {mark.final}")
 
             except Exception as e_inner:
                 error_msg = f"Entry {index} (Student: {mark.student_id}, Subject: {mark.subject_id}): Error - {str(e_inner)}"
@@ -291,23 +289,25 @@ async def save_marks(
 
 @router.get("/mark-criteria", response_model=Dict[str, Any])
 async def get_mark_criteria(
-    student_db: StudentDB = Depends(get_student_db)
+    mark_criteria_db: MarkCriteriaDB = Depends(get_mark_criteria_db)
 ):
     try:
-        criteria = await student_db.collection.database["mark_criteria"].find_one({})
+        criteria = await mark_criteria_db.get_mark_criteria()
         if not criteria:
-            await student_db.collection.database["mark_criteria"].insert_one(
-                {"internal": 30, "external": 70, "formula": "(internal * 0.3) + (external * 0.7)"}
-            )
+            default_criteria = {
+                "internal": 30,
+                "external": 70,
+                "formula": "(internal * 0.3) + (external * 0.7)",
+                "created_at": date.today().isoformat()
+            }
+            await mark_criteria_db.create_mark_criteria(default_criteria)
             logger.info("Inserted default mark criteria.")
-            return {"internal": 30, "external": 70, "formula": "(internal * 0.3) + (external * 0.7)"}
+            return default_criteria
 
+        # Return the first criteria (assuming one document for simplicity)
         logger.info("Returning mark criteria.")
-        return {
-            "internal": criteria.get("internal", 30),
-            "external": criteria.get("external", 70),
-            "formula": criteria.get("formula", "(internal * 0.3) + (external * 0.7)")
-        }
+        return criteria[0]
+
     except Exception as e:
         logger.error(f"Error retrieving mark criteria: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to retrieve mark criteria: {str(e)}")
@@ -315,7 +315,7 @@ async def get_mark_criteria(
 @router.post("/mark-criteria", response_model=Dict[str, str])
 async def save_mark_criteria(
     criteria: MarkCriteria,
-    student_db: StudentDB = Depends(get_student_db)
+    mark_criteria_db: MarkCriteriaDB = Depends(get_mark_criteria_db)
 ):
     try:
         if criteria.internal + criteria.external != 100:
@@ -323,30 +323,14 @@ async def save_mark_criteria(
         if not ("internal" in criteria.formula and "external" in criteria.formula):
             raise HTTPException(status_code=400, detail="Formula must include 'internal' and 'external'.")
 
-        update_result = await student_db.collection.database["mark_criteria"].update_one(
-            {},
-            {
-                "$set": {
-                    "internal": criteria.internal,
-                    "external": criteria.external,
-                    "formula": criteria.formula,
-                    "updated_at": date.today().isoformat()
-                }
-            },
-            upsert=True
-        )
+        criteria_data = criteria.dict()
+        criteria_data["updated_at"] = date.today().isoformat()
+        update_result = await mark_criteria_db.update_mark_criterion("", criteria_data, upsert=True)
 
-        if update_result.upserted_id:
-            logger.info(f"Mark criteria created with ID: {update_result.upserted_id}")
-            status_message = "Mark criteria created."
-        elif update_result.modified_count > 0:
-            logger.info("Mark criteria updated.")
-            status_message = "Mark criteria updated."
-        else:
-            logger.info("Mark criteria unchanged.")
-            status_message = "Mark criteria unchanged."
-
+        status_message = "Mark criteria updated." if update_result.get("id") else "Mark criteria created."
+        logger.info(status_message)
         return {"status": status_message}
+
     except HTTPException as e:
         raise e
     except Exception as e:

@@ -1,15 +1,11 @@
 import React, { useState } from 'react';
-import { UserRole } from '../../types/auth';
+import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, LogIn } from 'lucide-react';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 
-interface LoginFormProps {
-  onSubmit: (email: string, password: string, role: UserRole) => void;
-}
-
-export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
-  const [role, setRole] = useState<UserRole>('student');
+export const LoginForm: React.FC = () => {
+  const [role, setRole] = useState<'admin' | 'teacher' | 'student'>('teacher');
   const [teacherName, setTeacherName] = useState('');
   const [teacherId, setTeacherId] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -20,11 +16,13 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
   const [newPassword, setNewPassword] = useState('');
   const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
       const payload = {
         role,
         ...(role === 'admin' && { email, password }),
@@ -32,21 +30,31 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
         ...(role === 'student' && { studentId, password }),
       };
 
-      console.log('Login payload:', JSON.stringify(payload, null, 2));
-      const response = await axios.post('http://localhost:8000/api/login', payload);
-      const { id, fullName, requiresPasswordChange } = response.data;
+      console.log(`[${new Date().toISOString()}] Login payload:`, JSON.stringify(payload, null, 2));
+      const response = await axios.post(`${apiUrl}/api/login`, payload, { withCredentials: true });
+      console.log(`[${new Date().toISOString()}] Login response:`, JSON.stringify(response.data, null, 2));
 
+      const { id, fullName, requiresPasswordChange, access_token, session_id } = response.data;
       setUserId(id);
       setRequiresPasswordChange(requiresPasswordChange);
 
+      const authData = {
+        userId: id,
+        role,
+        fullName: fullName || id,
+        sessionId: session_id,
+      };
+      localStorage.setItem('auth', JSON.stringify(authData));
+      localStorage.setItem('token', access_token);
+
       if (!requiresPasswordChange) {
-        onSubmit(role === 'admin' ? email : id, password, role);
         toast.success(`Welcome, ${fullName || id}!`);
+        navigate('/dashboard');
       } else {
         toast.success('Please change your password');
       }
     } catch (error: any) {
-      console.error('Login error:', JSON.stringify(error.response?.data || error.message, null, 2));
+      console.error(`[${new Date().toISOString()}] Login error:`, JSON.stringify(error.response?.data || error.message, null, 2));
       toast.error(error.response?.data?.detail || 'Login failed');
     } finally {
       setLoading(false);
@@ -61,19 +69,23 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
     }
     setLoading(true);
     try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
       const payload = {
         role,
         id: role === 'teacher' ? teacherId : studentId,
         newPassword,
       };
 
-      console.log('Change password payload:', JSON.stringify(payload, null, 2));
-      await axios.post('http://localhost:8000/api/change-password', payload);
+      console.log(`[${new Date().toISOString()}] Change password payload:`, JSON.stringify(payload, null, 2));
+      await axios.post(`${apiUrl}/api/change-password`, payload, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+        withCredentials: true,
+      });
       setRequiresPasswordChange(false);
-      onSubmit(role === 'teacher' ? teacherId : studentId, newPassword, role);
       toast.success('Password changed successfully');
+      navigate('/dashboard');
     } catch (error: any) {
-      console.error('Change password error:', JSON.stringify(error.response?.data || error.message, null, 2));
+      console.error(`[${new Date().toISOString()}] Change password error:`, JSON.stringify(error.response?.data || error.message, null, 2));
       toast.error(error.response?.data?.detail || 'Failed to change password');
     } finally {
       setLoading(false);
@@ -228,7 +240,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onSubmit }) => {
             <div className="space-y-2">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-200">Role</label>
               <div className="grid grid-cols-3 gap-3">
-                {(['student', 'teacher', 'admin'] as UserRole[]).map((r) => (
+                {(['student', 'teacher', 'admin'] as const).map((r) => (
                   <button
                     key={r}
                     type="button"

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import axios from 'axios';
+import toast from 'react-hot-toast';
 
 interface AddTeacherModalProps {
   isOpen: boolean;
@@ -22,7 +22,7 @@ interface Subject {
 }
 
 export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClose, onSubmit, editingTeacher }) => {
-  const [formData, setFormData] = useState({
+  const initialFormData = {
     fullName: '',
     dateOfBirth: '',
     gender: '',
@@ -42,28 +42,68 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
     officeRoomNumber: '',
     alternateContact: '',
     remarks: '',
-  });
+    teacherId: '',
+    password: '', // No default password; backend will handle
+  };
+
+  const [formData, setFormData] = useState(initialFormData);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [generatedTeacherId, setGeneratedTeacherId] = useState<string>('');
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [deptsRes, subjectsRes] = await Promise.all([
-          axios.get('http://localhost:8000/api/departments'),
-          axios.get('http://localhost:8000/api/subjects')
-        ]);
-        setDepartments(deptsRes.data);
-        setSubjects(subjectsRes.data);
-        setLoading(false);
-      } catch (error) {
-        console.error('Failed to fetch data', error);
+        setLoading(true);
+        const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+        const token = localStorage.getItem('token');
+
+        // Fetch departments
+        const deptResponse = await fetch(`${apiUrl}/api/departments`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        if (!deptResponse.ok) {
+          const errorText = await deptResponse.text();
+          throw new Error(`Failed to fetch departments: ${deptResponse.status} ${errorText}`);
+        }
+        const deptData = await deptResponse.json();
+        setDepartments(deptData);
+
+        // Fetch subjects
+        const subjResponse = await fetch(`${apiUrl}/api/subjects`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+        if (!subjResponse.ok) {
+          const errorText = await subjResponse.text();
+          throw new Error(`Failed to fetch subjects: ${subjResponse.status} ${errorText}`);
+        }
+        const subjData = await subjResponse.json();
+        setSubjects(subjData);
+      } catch (err: any) {
+        setError(`Error fetching data: ${err.message}`);
+        toast.error(`Failed to load departments or subjects: ${err.message}`);
+      } finally {
         setLoading(false);
       }
     };
-    fetchData();
-  }, []);
+    if (isOpen) {
+      fetchData();
+      setGeneratedTeacherId('');
+      setFormData(initialFormData);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     if (editingTeacher) {
@@ -78,11 +118,11 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
         state: editingTeacher.state || '',
         postalCode: editingTeacher.postalCode || '',
         designation: editingTeacher.designation || '',
-        department: editingTeacher.department || '',
-        subjectsHandled: editingTeacher.subjectsHandled.map((s: any) => ({
-          subject_id: s.code,
-          batch: s.batch,
-          section: s.section
+        department: editingTeacher.department?._id || editingTeacher.department || '',
+        subjectsHandled: editingTeacher.subjectsHandled?.map((s: any) => ({
+          subject_id: s.subject_id?._id || s.subject_id || s.code,
+          batch: s.batch || '2025',
+          section: s.section || 'A',
         })) || [],
         yearsOfExperience: editingTeacher.yearsOfExperience?.toString() || '',
         qualification: editingTeacher.qualification || '',
@@ -91,7 +131,10 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
         officeRoomNumber: editingTeacher.officeRoomNumber || '',
         alternateContact: editingTeacher.alternateContact || '',
         remarks: editingTeacher.remarks || '',
+        teacherId: editingTeacher.teacherId || '',
+        password: '', // Do not prefill password
       });
+      setGeneratedTeacherId(editingTeacher.teacherId || '');
     }
   }, [editingTeacher]);
 
@@ -105,7 +148,7 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
     const values = Array.from(options).map(option => ({
       subject_id: option.value,
       batch: formData.subjectsHandled.find(s => s.subject_id === option.value)?.batch || '2025',
-      section: formData.subjectsHandled.find(s => s.subject_id === option.value)?.section || 'A'
+      section: formData.subjectsHandled.find(s => s.subject_id === option.value)?.section || 'A',
     }));
     setFormData(prev => ({ ...prev, subjectsHandled: values }));
   };
@@ -115,17 +158,56 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
       ...prev,
       subjectsHandled: prev.subjectsHandled.map(s =>
         s.subject_id === subject_id ? { ...s, [field]: value } : s
-      )
+      ),
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    try {
+      setLoading(true);
+
+      // Prepare payload
+      const payload = {
+        ...formData,
+        yearsOfExperience: parseInt(formData.yearsOfExperience) || 0,
+        department: formData.department,
+        subjectsHandled: formData.subjectsHandled.map(s => ({
+          subject_id: s.subject_id,
+          batch: s.batch,
+          section: s.section,
+        })),
+      };
+      if (!editingTeacher) {
+        delete payload.teacherId; // Exclude teacherId for new teachers
+      }
+      if (!payload.password) {
+        delete payload.password; // Let backend set default hashed password
+      }
+      console.log('Submitting payload:', JSON.stringify(payload, null, 2));
+
+      // Call onSubmit (passed as handleAddTeacher from Teachers.tsx)
+      const data = await onSubmit(payload);
+      
+      if (!editingTeacher) {
+        setGeneratedTeacherId(data.teacherId);
+      }
+      toast.success(`Teacher ${editingTeacher ? 'updated' : 'added'} successfully! Teacher ID: ${data.teacherId}`);
+      
+      // Reset form
+      setFormData(initialFormData);
+      setGeneratedTeacherId('');
+      onClose();
+    } catch (err: any) {
+      console.error('Submit error:', err);
+      const errorMessage = err.message || 'Failed to add teacher';
+      toast.error(`Failed to ${editingTeacher ? 'update' : 'add'} teacher: ${errorMessage}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!isOpen) return null;
-  if (loading) return <div>Loading...</div>;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -145,10 +227,25 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-8">
+          {error && <div className="text-red-500 text-center">{error}</div>}
+          {loading && <div className="text-center text-gray-600 dark:text-gray-400">Loading...</div>}
+
           {/* Personal Information */}
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Personal Information</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(generatedTeacherId || editingTeacher) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Teacher ID</label>
+                  <input
+                    type="text"
+                    name="teacherId"
+                    value={editingTeacher ? formData.teacherId : generatedTeacherId}
+                    readOnly
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 dark:text-white cursor-not-allowed"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Full Name</label>
                 <input
@@ -157,6 +254,17 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
                   value={formData.fullName}
                   onChange={handleChange}
                   required
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password (optional)</label>
+                <input
+                  type="password"
+                  name="password"
+                  value={formData.password}
+                  onChange={handleChange}
+                  placeholder="Leave blank for default"
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white"
                 />
               </div>
@@ -285,7 +393,7 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
                 >
                   <option value="">Select Department</option>
                   {departments.map(dept => (
-                    <option key={dept.id} value={dept.shortName}>{dept.name}</option>
+                    <option key={dept.id} value={dept.id}>{dept.name}</option>
                   ))}
                 </select>
               </div>
@@ -299,7 +407,7 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-gray-700 dark:text-white h-32"
                 >
                   {subjects.map(subject => (
-                    <option key={subject.id} value={subject.code}>{subject.name} ({subject.code})</option>
+                    <option key={subject.id} value={subject.id}>{subject.name} ({subject.code})</option>
                   ))}
                 </select>
                 <p className="mt-1 text-sm text-gray-500">Hold Ctrl/Cmd to select multiple subjects</p>
@@ -430,9 +538,10 @@ export const AddTeacherModal: React.FC<AddTeacherModalProps> = ({ isOpen, onClos
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+              disabled={loading}
+              className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:bg-indigo-400"
             >
-              {editingTeacher ? 'Update Teacher' : 'Add Teacher'}
+              {loading ? 'Submitting...' : editingTeacher ? 'Update Teacher' : 'Add Teacher'}
             </button>
           </div>
         </form>

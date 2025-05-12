@@ -2,11 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Any, Optional
 from bson import ObjectId
-from database import StudentDB, DepartmentDB, SubjectDB
-from dependencies import get_student_db, get_department_db, get_subject_db
+from database import TeacherDB, DepartmentDB, SubjectDB
+from dependencies import get_teacher_db, get_department_db, get_subject_db
 import logging
-from datetime import date
-from pydantic import BaseModel
 from datetime import datetime
 
 # Set up logging
@@ -40,6 +38,8 @@ class AddTeacherModel(BaseModel):
     officeRoomNumber: Optional[str] = None
     alternateContact: Optional[str] = None
     remarks: Optional[str] = None
+    teacherId: Optional[str] = None  # Added to allow frontend to send, but backend will override for new teachers
+    password: Optional[str] = "123456"  # Default password
 
 class AssignTeacherModel(BaseModel):
     teacherId: str  # ObjectId as string
@@ -75,7 +75,7 @@ def sanitize_teacher_data(teacher: Dict[str, Any], subjects: List[Dict[str, Any]
                 }
                 for assignment in value
             ]
-        elif isinstance(value, date):
+        elif isinstance(value, datetime):
             sanitized[key] = value.isoformat()
         else:
             sanitized[key] = value
@@ -84,7 +84,7 @@ def sanitize_teacher_data(teacher: Dict[str, Any], subjects: List[Dict[str, Any]
 @router.post("/teachers", response_model=Dict[str, Any])
 async def create_teacher(
     teacher: AddTeacherModel,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     department_db: DepartmentDB = Depends(get_department_db),
     subject_db: SubjectDB = Depends(get_subject_db)
 ):
@@ -105,12 +105,12 @@ async def create_teacher(
                 missing_codes = set(subject_codes) - set(s["code"] for s in subjects)
                 raise HTTPException(status_code=400, detail=f"Subjects not found: {missing_codes}")
 
-        # Generate teacher ID
-        current_year = str(date.today().year)
-        count = await student_db.collection.database["db.teachers"].count_documents({"teacherId": {"$regex": f"^{current_year}"}})
-        teacher_id = f"{current_year}T{(count + 1):04d}"
+        # Generate teacher ID based on joiningDate year
+        joining_year = str(teacher.joiningDate.year)
+        count = await teacher_db.collection.count_documents({"teacherId": {"$regex": f"^{joining_year}T"}})
+        teacher_id = f"{joining_year}T{(count + 1):04d}"
 
-        teacher_data = teacher.dict()
+        teacher_data = teacher.dict(exclude={"teacherId"})  # Exclude frontend-provided teacherId
         teacher_data["teacherId"] = teacher_id
         teacher_data["department"] = dept_id
         teacher_data["subjectsHandled"] = [
@@ -122,9 +122,7 @@ async def create_teacher(
             for assignment in teacher.subjectsHandled
         ]
 
-        result = await student_db.collection.database["db.teachers"].insert_one(teacher_data)
-        inserted_teacher = await student_db.collection.database["db.teachers"].find_one({"_id": result.inserted_id})
-
+        result = await teacher_db.create_teacher(teacher_data)
         # Update department's totalTeachers
         await department_db.collection.update_one(
             {"_id": dept_id},
@@ -134,7 +132,9 @@ async def create_teacher(
         # Fetch all subjects and departments for sanitization
         all_subjects = [s async for s in subject_db.collection.find()]
         all_depts = [d async for d in department_db.collection.find()]
-        return sanitize_teacher_data(inserted_teacher, all_subjects, all_depts)
+        sanitized_result = sanitize_teacher_data(result, all_subjects, all_depts)
+        sanitized_result["generatedTeacherId"] = teacher_id  # Include for frontend
+        return sanitized_result
 
     except HTTPException as e:
         raise e
@@ -144,17 +144,15 @@ async def create_teacher(
 
 @router.get("/teachers", response_model=List[Dict[str, Any]])
 async def get_teachers(
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     subject_db: SubjectDB = Depends(get_subject_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
-        teachers = []
+        teachers = await teacher_db.get_teachers()
         all_subjects = [s async for s in subject_db.collection.find()]
         all_depts = [d async for d in department_db.collection.find()]
-        async for teacher in student_db.collection.database["db.teachers"].find():
-            teachers.append(sanitize_teacher_data(teacher, all_subjects, all_depts))
-        return teachers
+        return [sanitize_teacher_data(teacher, all_subjects, all_depts) for teacher in teachers]
     except Exception as e:
         logger.error(f"Error retrieving teachers: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -162,12 +160,12 @@ async def get_teachers(
 @router.get("/teachers/{teacher_id}", response_model=Dict[str, Any])
 async def get_teacher(
     teacher_id: str,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     subject_db: SubjectDB = Depends(get_subject_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
-        teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(teacher_id)})
+        teacher = await teacher_db.get_teacher(teacher_id)
         if not teacher:
             raise HTTPException(status_code=404, detail="Teacher not found")
         all_subjects = [s async for s in subject_db.collection.find()]
@@ -183,7 +181,7 @@ async def get_teacher(
 async def update_teacher(
     teacher_id: str,
     teacher: AddTeacherModel,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     department_db: DepartmentDB = Depends(get_department_db),
     subject_db: SubjectDB = Depends(get_subject_db)
 ):
@@ -204,7 +202,7 @@ async def update_teacher(
                 missing_codes = set(subject_codes) - set(s["code"] for s in subjects)
                 raise HTTPException(status_code=400, detail=f"Subjects not found: {missing_codes}")
 
-        teacher_data = teacher.dict()
+        teacher_data = teacher.dict(exclude={"teacherId"})  # Preserve existing teacherId
         teacher_data["department"] = dept_id
         teacher_data["subjectsHandled"] = [
             {
@@ -215,17 +213,10 @@ async def update_teacher(
             for assignment in teacher.subjectsHandled
         ]
 
-        result = await student_db.collection.database["db.teachers"].update_one(
-            {"_id": ObjectId(teacher_id)},
-            {"$set": teacher_data}
-        )
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="Teacher not found")
-
-        updated_teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(teacher_id)})
+        result = await teacher_db.update_teacher(teacher_id, teacher_data)
         all_subjects = [s async for s in subject_db.collection.find()]
         all_depts = [d async for d in department_db.collection.find()]
-        return sanitize_teacher_data(updated_teacher, all_subjects, all_depts)
+        return sanitize_teacher_data(result, all_subjects, all_depts)
 
     except HTTPException as e:
         raise e
@@ -236,27 +227,19 @@ async def update_teacher(
 @router.delete("/teachers/{teacher_id}", response_model=Dict[str, str])
 async def delete_teacher(
     teacher_id: str,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
-        teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(teacher_id)})
-        if not teacher:
-            raise HTTPException(status_code=404, detail="Teacher not found")
-
-        result = await student_db.collection.database["db.teachers"].delete_one({"_id": ObjectId(teacher_id)})
-        if result.deleted_count == 0:
-            raise HTTPException(status_code=404, detail="Teacher not found")
-
+        result = await teacher_db.delete_teacher(teacher_id)
         # Update department's totalTeachers
-        dept_id = teacher.get("department")
-        if dept_id:
+        teacher = await teacher_db.collection.find_one({"_id": ObjectId(teacher_id)})
+        if teacher and teacher.get("department"):
             await department_db.collection.update_one(
-                {"_id": ObjectId(dept_id)},
+                {"_id": ObjectId(teacher["department"])},
                 {"$inc": {"totalTeachers": -1}}
             )
-
-        return {"id": teacher_id, "status": "deleted"}
+        return result
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -266,13 +249,13 @@ async def delete_teacher(
 @router.post("/teachers/assign", response_model=Dict[str, Any])
 async def assign_teacher(
     assignment: AssignTeacherModel,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     department_db: DepartmentDB = Depends(get_department_db),
     subject_db: SubjectDB = Depends(get_subject_db)
 ):
     try:
         # Validate teacher
-        teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(assignment.teacherId)})
+        teacher = await teacher_db.get_teacher(assignment.teacherId)
         if not teacher:
             raise HTTPException(status_code=404, detail="Teacher not found")
 
@@ -300,14 +283,14 @@ async def assign_teacher(
             for assignment in assignment.subjects
         ]
 
-        result = await student_db.collection.database["db.teachers"].update_one(
+        result = await teacher_db.collection.update_one(
             {"_id": ObjectId(assignment.teacherId)},
             {"$addToSet": {"subjectsHandled": {"$each": new_assignments}}}
         )
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Teacher not found")
 
-        updated_teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(assignment.teacherId)})
+        updated_teacher = await teacher_db.get_teacher(assignment.teacherId)
         all_subjects = [s async for s in subject_db.collection.find()]
         all_depts = [d async for d in department_db.collection.find()]
         return sanitize_teacher_data(updated_teacher, all_subjects, all_depts)
@@ -322,13 +305,13 @@ async def assign_teacher(
 async def unassign_subject(
     teacher_id: str,
     subject_code: str,
-    student_db: StudentDB = Depends(get_student_db),
+    teacher_db: TeacherDB = Depends(get_teacher_db),
     subject_db: SubjectDB = Depends(get_subject_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
         # Validate teacher
-        teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(teacher_id)})
+        teacher = await teacher_db.get_teacher(teacher_id)
         if not teacher:
             raise HTTPException(status_code=404, detail="Teacher not found")
 
@@ -338,7 +321,7 @@ async def unassign_subject(
             raise HTTPException(status_code=404, detail=f"Subject with code {subject_code} not found")
 
         # Remove the subject assignment
-        result = await student_db.collection.database["db.teachers"].update_one(
+        result = await teacher_db.collection.update_one(
             {"_id": ObjectId(teacher_id)},
             {"$pull": {"subjectsHandled": {"subject_id": ObjectId(subject["_id"])}}}
         )
@@ -347,9 +330,7 @@ async def unassign_subject(
         if result.modified_count == 0:
             raise HTTPException(status_code=400, detail=f"Subject {subject_code} not assigned to teacher")
 
-        # Fetch updated teacher
-        updated_teacher = await student_db.collection.database["db.teachers"].find_one({"_id": ObjectId(teacher_id)})
-        # Fetch all subjects and departments for sanitization
+        updated_teacher = await teacher_db.get_teacher(teacher_id)
         all_subjects = [s async for s in subject_db.collection.find()]
         all_depts = [d async for d in department_db.collection.find()]
         return sanitize_teacher_data(updated_teacher, all_subjects, all_depts)

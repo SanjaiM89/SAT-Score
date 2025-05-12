@@ -16,49 +16,24 @@ router = APIRouter()
 
 @router.post("/students", response_model=Dict[str, Any])
 async def create_student(
-    student: str = Body(...),
+    student: AddStudentModel,
     file: Optional[UploadFile] = File(None),
     student_db: StudentDB = Depends(get_student_db),
     department_db: DepartmentDB = Depends(get_department_db)
 ):
     try:
-        logger.debug(f"Raw student JSON: {student}")
-        student_data = json.loads(student)
-        try:
-            student_model = AddStudentModel(**student_data)
-        except ValidationError as ve:
-            logger.error(f"Validation error for student data: {ve.errors()}")
-            raise HTTPException(
-                status_code=422,
-                detail=[{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in ve.errors()]
-            )
-        logger.info(f"Received student data: {student_model.dict(by_alias=True)}")
-
-        try:
-            dept_id = ObjectId(student_model.department)
-        except Exception as e:
-            logger.error(f"Invalid department ID format: {student_model.department}, error: {str(e)}")
-            raise HTTPException(status_code=400, detail=f"Invalid department ID format: {student_model.department}")
-        
-        logger.debug(f"Querying department with ID: {student_model.department}")
+        dept_id = ObjectId(student.department)
         dept = await department_db.collection.find_one({'_id': dept_id})
         if not dept:
-            all_depts = []
-            async for d in department_db.collection.find():
-                all_depts.append({'id': str(d['_id']), 'name': d.get('name')})
-            logger.error(f"Department with ID {student_model.department} not found. Available: {all_depts}")
-            raise HTTPException(status_code=400, detail=f"Department with ID {student_model.department} not found")
-
-        logger.info(f"Found department: {dept['name']}, shortName: {dept['shortName']}")
+            all_depts = [{'id': str(d['_id']), 'name': d.get('name')} async for d in department_db.collection.find()]
+            logger.error(f"Department with ID {student.department} not found. Available: {all_depts}")
+            raise HTTPException(status_code=400, detail=f"Department with ID {student.department} not found")
 
         file_content = await file.read() if file else None
-        registration_number = await student_db.generate_registration_number(str(student_model.yearOfJoining), student_model.department)
-        result = await student_db.create_student(student_model, file_content, registration_number)
+        registration_number = await student_db.generate_registration_number(str(student.yearOfJoining), student.department)
+        result = await student_db.create_student(student, file_content, registration_number)
         return result
 
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in student data: {str(e)}")
-        raise HTTPException(status_code=422, detail=f"Invalid JSON in student data: {str(e)}")
     except HTTPException as e:
         logger.error(f"HTTPException in create_student: {e.detail}")
         raise e
