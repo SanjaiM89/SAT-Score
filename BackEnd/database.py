@@ -489,6 +489,7 @@ class TeacherDB:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.collection = db["db.teachers"]
         self.department_collection = db["db.departments"]
+        self.subjects_collection = db["db.subjects"]
 
     async def create_teacher(self, teacher: Dict[str, Any]) -> Dict[str, Any]:
         try:

@@ -67,116 +67,115 @@ export const Dashboard = () => {
   const navigate = useNavigate();
   const isMounted = useRef(true);
 
-  useEffect(() => {
-    isMounted.current = true;
+  const checkAuthAndFetchData = async () => {
+    console.log(`[${new Date().toISOString()}] Dashboard.tsx: Checking auth state`);
+    const authData = localStorage.getItem('auth');
+    const token = localStorage.getItem('token');
+    console.log(`[${new Date().toISOString()}] Dashboard.tsx: Local storage auth:`, authData);
+    console.log(`[${new Date().toISOString()}] Dashboard.tsx: Token:`, token ? token.slice(0, 20) + '...' : 'No token');
 
-    const checkAuthAndFetchData = async () => {
-      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Checking auth state`);
-      const authData = localStorage.getItem('auth');
-      const token = localStorage.getItem('token');
-      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Local storage auth:`, authData);
-      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Token:`, token ? token.slice(0, 20) + '...' : 'No token');
+    if (!authData || !token) {
+      console.warn(`[${new Date().toISOString()}] Dashboard.tsx: No auth data or token, redirecting to login`);
+      toast.error('Please log in to access the dashboard');
+      navigate('/login', { replace: true });
+      return;
+    }
 
-      if (!authData || !token) {
-        console.warn(`[${new Date().toISOString()}] Dashboard.tsx: No auth data or token, redirecting to login`);
-        toast.error('Please log in to access the dashboard');
-        navigate('/login', { replace: true });
-        return;
+    const parsedAuth: AuthState = JSON.parse(authData);
+    setAuth(parsedAuth);
+
+    // Verify JWT with /api/me
+    try {
+      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Fetching /api/me`);
+      const checkResponse = await fetch('http://localhost:8000/api/me', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        credentials: 'include',
+      });
+
+      if (!checkResponse.ok) {
+        const errorData = await checkResponse.json();
+        console.error(`[${new Date().toISOString()}] Dashboard.tsx: /api/me error:`, JSON.stringify(errorData, null, 2));
+        throw new Error(errorData.detail || 'Invalid token');
       }
 
-      const parsedAuth: AuthState = JSON.parse(authData);
-      setAuth(parsedAuth);
+      const checkData = await checkResponse.json();
+      console.log(`[${new Date().toISOString()}] Dashboard.tsx: /api/me response:`, JSON.stringify(checkData, null, 2));
 
-      // Verify JWT with /api/me
-      try {
-        console.log(`[${new Date().toISOString()}] Dashboard.tsx: Fetching /api/me`);
-        const checkResponse = await fetch('http://localhost:8000/api/me', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          credentials: 'include',
-        });
-
-        if (!checkResponse.ok) {
-          const errorData = await checkResponse.json();
-          console.error(`[${new Date().toISOString()}] Dashboard.tsx: /api/me error:`, JSON.stringify(errorData, null, 2));
-          throw new Error(errorData.detail || 'Invalid token');
-        }
-
-        const checkData = await checkResponse.json();
-        console.log(`[${new Date().toISOString()}] Dashboard.tsx: /api/me response:`, JSON.stringify(checkData, null, 2));
-
-        if (checkData.role !== parsedAuth.role || checkData.id !== parsedAuth.userId) {
-          console.warn(`[${new Date().toISOString()}] Dashboard.tsx: Token mismatch, redirecting to login`);
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          toast.error('Session invalid. Please log in again.');
-          navigate('/login', { replace: true });
-          return;
-        }
-
-        console.log(`[${new Date().toISOString()}] Dashboard.tsx: Token validated for userId: ${checkData.id}`);
-      } catch (checkError: any) {
-        console.error(`[${new Date().toISOString()}] Dashboard.tsx: /api/me error:`, JSON.stringify(checkError.message, null, 2));
+      if (checkData.role !== parsedAuth.role || checkData.id !== parsedAuth.userId) {
+        console.warn(`[${new Date().toISOString()}] Dashboard.tsx: Token mismatch, redirecting to login`);
         localStorage.removeItem('auth');
         localStorage.removeItem('token');
-        toast.error('Failed to verify session. Please log in again.');
+        toast.error('Session invalid. Please log in again.');
         navigate('/login', { replace: true });
         return;
       }
 
-      // Fetch dashboard data
-      try {
-        const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-        const endpoint = `${apiUrl}/api/teacher/dashboard`;
-        console.log(`[${new Date().toISOString()}] Dashboard.tsx: Sending request to ${endpoint}`);
-        const response = await fetch(endpoint, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          credentials: 'include',
-        });
+      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Token validated for userId: ${checkData.id}`);
+    } catch (checkError: any) {
+      console.error(`[${new Date().toISOString()}] Dashboard.tsx: /api/me error:`, JSON.stringify(checkError.message, null, 2));
+      localStorage.removeItem('auth');
+      localStorage.removeItem('token');
+      toast.error('Failed to verify session. Please log in again.');
+      navigate('/login', { replace: true });
+      return;
+    }
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error(`[${new Date().toISOString()}] Dashboard.tsx: Fetch error:`, JSON.stringify(errorData, null, 2));
-          throw new Error(`Status: ${response.status}, Detail: ${errorData.detail || 'Unknown error'}`);
-        }
+    // Fetch dashboard data
+    try {
+      const apiUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const endpoint = `${apiUrl}/api/teacher/dashboard`;
+      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Sending request to ${endpoint}`);
+      const response = await fetch(endpoint, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        credentials: 'include',
+      });
 
-        const data = await response.json();
-        console.log(`[${new Date().toISOString()}] Dashboard.tsx: Response received:`, JSON.stringify(data, null, 2));
-
-        if (isMounted.current) {
-          setDashboardData(data);
-          setError(null);
-        }
-      } catch (fetchError: any) {
-        console.error(`[${new Date().toISOString()}] Dashboard.tsx: Fetch error:`, {
-          message: fetchError.message,
-          status: fetchError.response?.status,
-          detail: fetchError.response?.data?.detail,
-        });
-        const errorMessage = fetchError.message || 'Failed to load dashboard data';
-        if (isMounted.current) {
-          setError(errorMessage);
-          toast.error(errorMessage);
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          navigate('/login', { replace: true });
-        }
-      } finally {
-        if (isMounted.current) {
-          setLoading(false);
-        }
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error(`[${new Date().toISOString()}] Dashboard.tsx: Fetch error:`, JSON.stringify(errorData, null, 2));
+        throw new Error(`Status: ${response.status}, Detail: ${errorData.detail || 'Unknown error'}`);
       }
-    };
 
+      const data = await response.json();
+      console.log(`[${new Date().toISOString()}] Dashboard.tsx: Response received:`, JSON.stringify(data, null, 2));
+
+      if (isMounted.current) {
+        setDashboardData(data);
+        setError(null);
+      }
+    } catch (fetchError: any) {
+      console.error(`[${new Date().toISOString()}] Dashboard.tsx: Fetch error:`, {
+        message: fetchError.message,
+        status: fetchError.response?.status,
+        detail: fetchError.response?.data?.detail,
+      });
+      const errorMessage = fetchError.message.includes('404')
+        ? 'Dashboard data not available. Please try again later.'
+        : 'Failed to load dashboard data. Please try again.';
+      if (isMounted.current) {
+        setError(errorMessage);
+        toast.error(errorMessage);
+        // Do NOT clear localStorage or redirect to /login
+      }
+    } finally {
+      if (isMounted.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    isMounted.current = true;
     checkAuthAndFetchData();
 
     return () => {
@@ -404,7 +403,10 @@ export const Dashboard = () => {
           <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg">
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Quick Links</h2>
             <div className="grid grid-cols-1 gap-4">
-              <button className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl text-left hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
+              <button
+                className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl text-left hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                onClick={() => navigate('/dashboard/marks-entry')}
+              >
                 <ClipboardCheck className="w-6 h-6 text-blue-500 mb-2" />
                 <p className="font-medium text-gray-900 dark:text-white">Enter Marks</p>
               </button>

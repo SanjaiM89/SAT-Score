@@ -94,7 +94,7 @@ routers = [
     (teacher_router, "Teacher", "/api"),
     (marks_router, "Marks", "/api"),
     (admin_dashboard_router, "Admin Dashboard", "/api"),
-    (teacher_dashboard_router, "Teacher Dashboard", "/api/teacher"),
+    (teacher_dashboard_router, "Teacher Dashboard", "/api"),  # Changed from /api/teacher to /api
     (internal_marks_router, "Internal Marks", "/api"),
     (sat_marks_router, "SAT Marks", "/api"),
     (login_router, "Login", "/api"),
