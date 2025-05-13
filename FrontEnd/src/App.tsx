@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { LoginForm } from './components/auth/LoginForm';
@@ -20,12 +20,6 @@ import { SATScore } from './pages/admin/SATScore';
 import { Announcements as AdminAnnouncements } from './pages/admin/Announcements';
 import { Announcements as StudentAnnouncements } from './pages/student/Announcements';
 import { UserRole } from './types/auth';
-import { jwtDecode } from 'jwt-decode';
-
-interface TokenPayload {
-  role: UserRole;
-  id: string;
-}
 
 interface AuthState {
   userId: string;
@@ -38,121 +32,35 @@ const ProtectedRoute: React.FC<{
   allowedRoles: UserRole[];
   children: React.ReactNode;
 }> = ({ allowedRoles, children }) => {
-  const [auth, setAuth] = useState<AuthState | null>(null);
-  const [loading, setLoading] = useState(true);
+  console.log(`[${new Date().toISOString()}] ProtectedRoute: Checking auth`);
+  const authData = localStorage.getItem('auth');
+  const token = localStorage.getItem('token');
+  console.log(`[${new Date().toISOString()}] ProtectedRoute: Auth data:`, authData);
+  console.log(`[${new Date().toISOString()}] ProtectedRoute: Token:`, token ? token.slice(0, 20) + '...' : 'No token');
+  console.log(`[${new Date().toISOString()}] ProtectedRoute: Allowed roles:`, allowedRoles);
 
-  useEffect(() => {
-    const validateAuth = async () => {
-      console.log(`[${new Date().toISOString()}] ProtectedRoute: Validating auth`);
-      const authData = localStorage.getItem('auth');
-      const token = localStorage.getItem('token');
-      console.log(`[${new Date().toISOString()}] ProtectedRoute: Auth data:`, authData);
-      console.log(`[${new Date().toISOString()}] ProtectedRoute: Token:`, token ? token.slice(0, 20) + '...' : 'No token');
-
-      if (!authData || !token) {
-        console.warn(`[${new Date().toISOString()}] ProtectedRoute: No auth data or token`);
-        setAuth(null);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const parsedAuth: AuthState = JSON.parse(authData);
-        const decoded: TokenPayload = jwtDecode(token);
-        console.log(`[${new Date().toISOString()}] ProtectedRoute: Decoded JWT:`, JSON.stringify(decoded, null, 2));
-
-        if (decoded.role !== parsedAuth.role || decoded.id !== parsedAuth.userId) {
-          console.warn(`[${new Date().toISOString()}] ProtectedRoute: Token mismatch`);
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          setAuth(null);
-          setLoading(false);
-          return;
-        }
-
-        // Verify token with /api/me
-        const meResponse = await fetch('http://localhost:8000/api/me', {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-        });
-
-        if (!meResponse.ok) {
-          console.error(`[${new Date().toISOString()}] ProtectedRoute: /api/me failed:`, await meResponse.text());
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          setAuth(null);
-          setLoading(false);
-          return;
-        }
-
-        const meData = await meResponse.json();
-        console.log(`[${new Date().toISOString()}] ProtectedRoute: /api/me response:`, JSON.stringify(meData, null, 2));
-
-        // Verify session with /api/check-cookie
-        const cookieResponse = await fetch('http://localhost:8000/api/check-cookie', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include',
-        });
-
-        if (!cookieResponse.ok) {
-          console.error(`[${new Date().toISOString()}] ProtectedRoute: /api/check-cookie failed:`, await cookieResponse.text());
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          setAuth(null);
-          setLoading(false);
-          return;
-        }
-
-        const cookieData = await cookieResponse.json();
-        console.log(`[${new Date().toISOString()}] ProtectedRoute: /api/check-cookie response:`, JSON.stringify(cookieData, null, 2));
-
-        if (meData.role !== parsedAuth.role || meData.id !== parsedAuth.userId || cookieData.session_id !== parsedAuth.sessionId) {
-          console.warn(`[${new Date().toISOString()}] ProtectedRoute: Server auth or session mismatch`);
-          localStorage.removeItem('auth');
-          localStorage.removeItem('token');
-          setAuth(null);
-        } else {
-          setAuth(parsedAuth);
-        }
-      } catch (error) {
-        console.error(`[${new Date().toISOString()}] ProtectedRoute: Auth validation error:`, error);
-        localStorage.removeItem('auth');
-        localStorage.removeItem('token');
-        setAuth(null);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    validateAuth();
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  if (!auth || !allowedRoles.includes(auth.role)) {
-    console.warn(`[${new Date().toISOString()}] ProtectedRoute: Access denied, redirecting to /login`);
+  if (!authData || !token) {
+    console.warn(`[${new Date().toISOString()}] ProtectedRoute: No auth data or token, redirecting to /login`);
     return <Navigate to="/login" replace />;
   }
 
-  return <>{children}</>;
+  try {
+    const auth: AuthState = JSON.parse(authData);
+    console.log(`[${new Date().toISOString()}] ProtectedRoute: Current role:`, auth.role);
+    if (!allowedRoles.includes(auth.role)) {
+      console.warn(`[${new Date().toISOString()}] ProtectedRoute: Role ${auth.role} not allowed, redirecting to /login`);
+      return <Navigate to="/login" replace />;
+    }
+    return <>{children}</>;
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] ProtectedRoute: Failed to parse auth data:`, error);
+    return <Navigate to="/login" replace />;
+  }
 };
 
-// Component to dynamically select the dashboard based on role
 const DashboardHome: React.FC = () => {
   const auth = JSON.parse(localStorage.getItem('auth') || '{}') as AuthState;
+  console.log(`[${new Date().toISOString()}] DashboardHome: Rendering for role=${auth.role}`);
   switch (auth.role) {
     case 'admin':
       return <AdminDashboard />;
@@ -161,8 +69,21 @@ const DashboardHome: React.FC = () => {
     case 'student':
       return <StudentDashboard />;
     default:
+      console.warn(`[${new Date().toISOString()}] DashboardHome: Invalid role, redirecting to /login`);
       return <Navigate to="/login" replace />;
   }
+};
+
+const NotFound: React.FC = () => {
+  return (
+    <div className="flex flex-col items-center justify-center h-screen">
+      <h1 className="text-4xl font-bold">404 - Page Not Found</h1>
+      <p className="mt-4">The page you're looking for doesn't exist.</p>
+      <a href="/dashboard" className="mt-6 text-blue-500 hover:underline">
+        Go to Dashboard
+      </a>
+    </div>
+  );
 };
 
 const router = createBrowserRouter([
@@ -180,118 +101,62 @@ const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'teacher', 'student']}>
-            <Navigate to="/dashboard/home" replace />
-          </ProtectedRoute>
-        ),
+        element: <Navigate to="/dashboard/home" replace />,
       },
       {
         path: 'home',
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'teacher', 'student']}>
-            <DashboardHome />
-          </ProtectedRoute>
-        ),
+        element: <DashboardHome />,
       },
       {
         path: 'marks-entry',
-        element: (
-          <ProtectedRoute allowedRoles={['teacher']}>
-            <MarksEntry />
-          </ProtectedRoute>
-        ),
+        element: <MarksEntry />,
       },
       {
         path: 'sat-marks',
-        element: (
-          <ProtectedRoute allowedRoles={['teacher']}>
-            <SATMarks />
-          </ProtectedRoute>
-        ),
+        element: <SATMarks />,
       },
       {
         path: 'internal-marks',
-        element: (
-          <ProtectedRoute allowedRoles={['teacher']}>
-            <InternalMarks />
-          </ProtectedRoute>
-        ),
+        element: <InternalMarks />,
       },
       {
         path: 'results',
-        element: (
-          <ProtectedRoute allowedRoles={['student']}>
-            <Results />
-          </ProtectedRoute>
-        ),
+        element: <Results />,
       },
       {
         path: 'cgpa-calculator',
-        element: (
-          <ProtectedRoute allowedRoles={['student']}>
-            <CGPACalculator />
-          </ProtectedRoute>
-        ),
+        element: <CGPACalculator />,
       },
       {
         path: 'performance',
-        element: (
-          <ProtectedRoute allowedRoles={['student']}>
-            <Performance />
-          </ProtectedRoute>
-        ),
+        element: <Performance />,
       },
       {
         path: 'teachers',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <Teachers />
-          </ProtectedRoute>
-        ),
+        element: <Teachers />,
       },
       {
         path: 'students',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <Students />
-          </ProtectedRoute>
-        ),
+        element: <Students />,
       },
       {
         path: 'departments-subjects',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <DepartmentsAndSubjects />
-          </ProtectedRoute>
-        ),
+        element: <DepartmentsAndSubjects />,
       },
       {
         path: 'analytics',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <Analytics />
-          </ProtectedRoute>
-        ),
+        element: <Analytics />,
       },
       {
         path: 'sat-score',
-        element: (
-          <ProtectedRoute allowedRoles={['admin']}>
-            <SATScore />
-          </ProtectedRoute>
-        ),
+        element: <SATScore />,
       },
       {
         path: 'announcements',
-        element: (
-          <ProtectedRoute allowedRoles={['admin', 'student']}>
-            <Outlet />
-          </ProtectedRoute>
-        ),
+        element: <Outlet />,
         children: [
           {
-            index: true,
+            path: 'admin',
             element: (
               <ProtectedRoute allowedRoles={['admin']}>
                 <AdminAnnouncements />
@@ -311,8 +176,16 @@ const router = createBrowserRouter([
     ],
   },
   {
+    path: '/marks-entry',
+    element: <Navigate to="/dashboard/marks-entry" replace />,
+  },
+  {
+    path: '/sat-marks',
+    element: <Navigate to="/dashboard/sat-marks" replace />,
+  },
+  {
     path: '*',
-    element: <Navigate to="/login" replace />,
+    element: <NotFound />,
   },
 ]);
 

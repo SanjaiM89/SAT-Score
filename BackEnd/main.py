@@ -16,7 +16,14 @@ import uvicorn
 from starlette.middleware.errors import ServerErrorMiddleware
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('sat_score_backend.log')
+    ]
+)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -27,19 +34,19 @@ db = Database()
 async def lifespan(app: FastAPI):
     try:
         await db.startup()
-        logger.info("Database connection established")
+        logger.info("Database connection established successfully")
         app.db = db
         logger.info("Application startup complete")
     except Exception as e:
-        logger.error(f"Failed to connect to database: {str(e)}")
+        logger.error(f"Failed to connect to database: {str(e)}", exc_info=True)
         raise
     yield
     try:
         await db.shutdown()
         logger.info("Database connection closed")
-        logger.info("Application shutdown")
+        logger.info("Application shutdown complete")
     except Exception as e:
-        logger.error(f"Failed to close database connection: {str(e)}")
+        logger.error(f"Failed to close database connection: {str(e)}", exc_info=True)
 
 app = FastAPI(title="SAT Score Backend", lifespan=lifespan)
 
@@ -63,20 +70,21 @@ app.add_middleware(
 )
 
 # Log CORS configuration
-logger.info("CORS configured with allow_origins: %s, expose_headers: ['set-cookie']", [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://localhost:8080",
-])
+logger.info(
+    "CORS configured with allow_origins: %s, allow_credentials: %s, expose_headers: %s",
+    ["http://localhost:5173", "http://localhost:3000", "http://localhost:8080"],
+    True,
+    ["set-cookie"]
+)
 
 # HTTP middleware for logging requests and responses
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info(f"Incoming request: {request.method} {request.url}")
+    logger.info(f"Incoming request: {request.method} {request.url} | Headers: {dict(request.headers)}")
     try:
         response = await call_next(request)
         headers = dict(response.headers)
-        logger.info(f"Response status: {response.status_code}, headers: {headers}")
+        logger.info(f"Response status: {response.status_code} | Headers: {headers}")
         set_cookie = headers.get("set-cookie")
         if set_cookie:
             logger.debug(f"Set-Cookie header sent: {set_cookie}")
@@ -84,7 +92,7 @@ async def log_requests(request: Request, call_next):
             logger.debug("No Set-Cookie header in response")
         return response
     except Exception as e:
-        logger.error(f"Error processing request {request.url}: {str(e)}")
+        logger.error(f"Error processing request {request.url}: {str(e)}", exc_info=True)
         raise
 
 # Include routers
@@ -94,7 +102,7 @@ routers = [
     (teacher_router, "Teacher", "/api"),
     (marks_router, "Marks", "/api"),
     (admin_dashboard_router, "Admin Dashboard", "/api"),
-    (teacher_dashboard_router, "Teacher Dashboard", "/api"),  # Changed from /api/teacher to /api
+    (teacher_dashboard_router, "Teacher Dashboard", "/api"),
     (internal_marks_router, "Internal Marks", "/api"),
     (sat_marks_router, "SAT Marks", "/api"),
     (login_router, "Login", "/api"),
@@ -104,11 +112,12 @@ for router, name, prefix in routers:
         app.include_router(router, prefix=prefix)
         logger.info(f"{name} router included successfully at {prefix}")
     except Exception as e:
-        logger.error(f"Failed to include {name} router at {prefix}: {str(e)}")
+        logger.error(f"Failed to include {name} router at {prefix}: {str(e)}", exc_info=True)
         raise
 
 @app.get("/")
 async def root():
+    logger.info("Root endpoint accessed")
     return {"message": "Welcome to the SAT Score API"}
 
 @app.get("/debug/routes")
@@ -117,6 +126,7 @@ async def debug_routes():
         {"path": str(route.path), "methods": list(route.methods), "name": route.name}
         for route in app.routes
     ]
+    logger.info(f"Debug routes accessed, returning {len(routes)} routes")
     return {"routes": routes}
 
 if __name__ == "__main__":

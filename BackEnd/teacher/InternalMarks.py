@@ -3,12 +3,16 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Union
 from bson import ObjectId
 from database import StudentDB, SubjectDB
-from dependencies import get_student_db, get_subject_db
+from dependencies import get_student_db, get_subject_db, get_current_user
 import logging
 from datetime import date
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(), logging.FileHandler('sat_score_backend.log')]
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -16,16 +20,15 @@ router = APIRouter()
 class InternalMarkEntry(BaseModel):
     student_id: str
     subject_id: str
-    fat_number: int = Field(..., ge=1, le=3)  # FAT 1, 2, or 3
+    fat_number: int = Field(..., ge=1, le=3)
     fat: Union[float, int] = Field(..., ge=0, le=100)
-    assignments: List[Union[float, int]] = Field(..., min_items=1, max_items=5)  # 1-5 assignments
+    assignments: List[Union[float, int]] = Field(..., min_items=1, max_items=5)
     academic_year: str
 
 class InternalMarksData(BaseModel):
     marks: List[InternalMarkEntry]
 
 def is_valid_object_id(oid: str) -> bool:
-    """Check if the string is a valid MongoDB ObjectId."""
     try:
         ObjectId(oid)
         return True
@@ -33,7 +36,6 @@ def is_valid_object_id(oid: str) -> bool:
         return False
 
 def sanitize_value(value: Any) -> Any:
-    """Recursively convert ObjectId to string and handle nested structures."""
     if isinstance(value, ObjectId):
         return str(value)
     elif isinstance(value, list):
@@ -50,8 +52,14 @@ def sanitize_value(value: Any) -> Any:
 async def save_internal_marks(
     marks_data: InternalMarksData,
     student_db: StudentDB = Depends(get_student_db),
-    subject_db: SubjectDB = Depends(get_subject_db)
+    subject_db: SubjectDB = Depends(get_subject_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    logger.info(f"POST /internal-marks: User {current_user['id']} (role: {current_user['role']})")
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can save internal marks")
+    
     logger.debug(f"Received internal marks payload: {marks_data.dict()}")
     saved_count = 0
     errors = []
@@ -61,29 +69,24 @@ async def save_internal_marks(
 
         for index, mark in enumerate(marks_data.marks):
             try:
-                # Validate student_id
                 if not is_valid_object_id(mark.student_id):
                     errors.append(f"Entry {index}: Invalid student_id format: {mark.student_id}")
                     continue
                 student_oid = ObjectId(mark.student_id)
 
-                # Validate subject_id
                 if not is_valid_object_id(mark.subject_id):
                     errors.append(f"Entry {index}: Invalid subject_id format: {mark.subject_id}")
                     continue
                 subject_oid = ObjectId(mark.subject_id)
 
-                # Validate fat_number
                 if mark.fat_number not in [1, 2, 3]:
                     errors.append(f"Entry {index}: Invalid fat_number: {mark.fat_number}. Must be 1, 2, or 3.")
                     continue
 
-                # Validate fat
                 if mark.fat is None or not isinstance(mark.fat, (int, float)):
                     errors.append(f"Entry {index}: Invalid FAT mark: {mark.fat}")
                     continue
 
-                # Validate assignments
                 if not mark.assignments or len(mark.assignments) > 5:
                     errors.append(f"Entry {index}: Invalid number of assignments: {len(mark.assignments)}. Must be 1-5.")
                     continue
@@ -92,19 +95,16 @@ async def save_internal_marks(
                         errors.append(f"Entry {index}: Invalid assignment {i+1} mark: {assignment_mark}. Must be 0-100.")
                         continue
 
-                # Validate student
                 student = await student_db.collection.find_one({"_id": student_oid})
                 if not student:
                     errors.append(f"Entry {index}: Student {mark.student_id} not found")
                     continue
 
-                # Validate subject
                 subject = await subject_db.collection.find_one({"_id": subject_oid})
                 if not subject:
                     errors.append(f"Entry {index}: Subject {mark.subject_id} not found")
                     continue
 
-                # Validate subject is assigned to student
                 courses = student.get("courses", [])
                 subject_ids_in_student = set()
                 for course in courses:
@@ -123,7 +123,6 @@ async def save_internal_marks(
                     errors.append(f"Entry {index}: Subject {mark.subject_id} (Code: {subject.get('code', 'N/A')}) not assigned to student {mark.student_id}")
                     continue
 
-                # Update internal_marks in students collection
                 update_result = await student_db.collection.update_one(
                     {"_id": student_oid},
                     {
@@ -137,7 +136,7 @@ async def save_internal_marks(
 
                 if update_result.modified_count > 0 or update_result.matched_count > 0:
                     saved_count += 1
-                    logger.info(f"Saved internal mark for Student: {mark.student_id}, Subject: {mark.subject_id}, FAT: {mark.fat_number}, Assignments: {mark.assignments}")
+                    logger.info(f"Saved internal mark for Student: {mark.student_id}, Subject: {mark.subject_id}, FAT: {mark.fat_number}")
                 else:
                     errors.append(f"Entry {index}: Failed to save internal mark for Student: {mark.student_id}, Subject: {mark.subject_id}")
 
@@ -160,26 +159,30 @@ async def save_internal_marks(
         logger.error(f"HTTP Exception in save_internal_marks: {e.detail}")
         raise e
     except Exception as e_outer:
-        logger.error(f"Unexpected error in save_internal_marks: {str(e_outer)}")
+        logger.error(f"Unexpected error in save_internal_marks: {str(e_outer)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e_outer)}")
 
 @router.get("/internal-marks", response_model=List[Dict[str, Any]])
 async def get_internal_marks(
     student_db: StudentDB = Depends(get_student_db),
-    subject_db: SubjectDB = Depends(get_subject_db)
+    subject_db: SubjectDB = Depends(get_subject_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    logger.info(f"GET /internal-marks: User {current_user['id']} (role: {current_user['role']})")
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can view internal marks")
+    
     try:
         students = []
         all_subjects = await subject_db.collection.find().to_list(length=None)
-        logger.info(f"Found {len(all_subjects)} subjects: {[s.get('code', 'N/A') for s in all_subjects]}")
+        logger.info(f"Found {len(all_subjects)} subjects")
         
         async for student in student_db.collection.find({}, {"fileContent": 0, "photo": 0}):
             try:
                 student_id = str(student.get("_id", "unknown"))
                 internal_marks = student.get("internal_marks", {})
                 sanitized_marks = []
-
-                # Sanitize student data
                 student = sanitize_value(student)
 
                 for subject_id, marks_data in internal_marks.items():
@@ -188,8 +191,6 @@ async def get_internal_marks(
                         if not subject:
                             logger.warning(f"Student {student_id} has internal marks for unknown subject {subject_id}")
                             continue
-
-                        # Sanitize subject data
                         subject = sanitize_value(subject)
 
                         sanitized_marks.append({
@@ -224,5 +225,5 @@ async def get_internal_marks(
         logger.info(f"Returning internal marks for {len(students)} students")
         return students
     except Exception as e:
-        logger.error(f"Error retrieving internal marks: {str(e)}")
+        logger.error(f"Error retrieving internal marks: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to retrieve internal marks: {str(e)}")

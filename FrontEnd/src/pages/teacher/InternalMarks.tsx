@@ -2,6 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { Save, AlertCircle, Search, Filter, Plus, Minus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+
+// Set up axios interceptor to include JWT
+axios.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, (error) => {
+  return Promise.reject(error);
+});
 
 interface Student {
   id: string;
@@ -38,6 +50,7 @@ interface InternalMark {
 }
 
 export const InternalMarks = () => {
+  const navigate = useNavigate();
   const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
   const [selectedFAT, setSelectedFAT] = useState<1 | 2 | 3>(1);
   const [marks, setMarks] = useState<MarksData>({});
@@ -51,14 +64,38 @@ export const InternalMarks = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const refreshToken = async () => {
+    try {
+      console.log(`[${new Date().toISOString()}] InternalMarks.tsx: Attempting token refresh`);
+      const response = await axios.post('http://localhost:8000/api/refresh');
+      const { access_token } = response.data;
+      localStorage.setItem('token', access_token);
+      console.log(`[${new Date().toISOString()}] InternalMarks.tsx: Token refreshed successfully`);
+      return access_token;
+    } catch (error: any) {
+      console.error(`[${new Date().toISOString()}] InternalMarks.tsx: Refresh token failed:`, error.response?.data || error.message);
+      throw error;
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
+        console.log(`[${new Date().toISOString()}] InternalMarks.tsx: Fetching data...`);
         const timestamp = new Date().getTime();
         const [studentsRes, subjectsRes, marksRes] = await Promise.all([
-          axios.get(`http://localhost:8000/api/students?t=${timestamp}`),
-          axios.get(`http://localhost:8000/api/subjects?t=${timestamp}`),
-          axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`),
+          axios.get(`http://localhost:8000/api/students?t=${timestamp}`).then(res => {
+            console.log(`[${new Date().toISOString()}] InternalMarks.tsx: /api/students response:`, res.data);
+            return res;
+          }),
+          axios.get(`http://localhost:8000/api/subjects?t=${timestamp}`).then(res => {
+            console.log(`[${new Date().toISOString()}] InternalMarks.tsx: /api/subjects response:`, res.data);
+            return res;
+          }),
+          axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`).then(res => {
+            console.log(`[${new Date().toISOString()}] InternalMarks.tsx: /api/internal-marks response:`, res.data);
+            return res;
+          }),
         ]);
 
         // Map students
@@ -68,7 +105,7 @@ export const InternalMarks = () => {
           rollNumber: student.registrationNumber || 'N/A',
           department: student.department || 'N/A',
           year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : 0,
-          subjects: student.subjects || student.courses || [],
+          subjects: student.courses || [],
         }));
 
         // Map subjects
@@ -94,14 +131,65 @@ export const InternalMarks = () => {
         setSubjects(mappedSubjects);
         setMarks(initialMarks);
         setLoading(false);
-      } catch (error) {
-        console.error('Fetch error:', error);
-        toast.error('Failed to fetch data');
-        setLoading(false);
+      } catch (error: any) {
+        console.error(`[${new Date().toISOString()}] InternalMarks.tsx: Fetch error:`, error.response?.data || error.message);
+        if (error.response?.status === 401) {
+          console.warn(`[${new Date().toISOString()}] InternalMarks.tsx: 401 Unauthorized, attempting token refresh`);
+          try {
+            await refreshToken();
+            // Retry the original request
+            const timestamp = new Date().getTime();
+            const [studentsRes, subjectsRes, marksRes] = await Promise.all([
+              axios.get(`http://localhost:8000/api/students?t=${timestamp}`),
+              axios.get(`http://localhost:8000/api/subjects?t=${timestamp}`),
+              axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`),
+            ]);
+
+            const mappedStudents = studentsRes.data.map((student: any) => ({
+              id: student.id,
+              name: student.fullName || 'Unknown',
+              rollNumber: student.registrationNumber || 'N/A',
+              department: student.department || 'N/A',
+              year: student.yearOfStudy && Number.isInteger(parseInt(student.yearOfStudy)) ? parseInt(student.yearOfStudy) : 0,
+              subjects: student.courses || [],
+            }));
+
+            const mappedSubjects = subjectsRes.data.map((subject: any) => ({
+              id: subject.id,
+              code: subject.code || 'N/A',
+              name: subject.name || 'Unknown',
+            }));
+
+            const initialMarks: MarksData = {};
+            marksRes.data.forEach((student: any) => {
+              student.internal_marks.forEach((mark: InternalMark) => {
+                initialMarks[mark.student_id] = initialMarks[mark.student_id] || {};
+                initialMarks[mark.student_id][mark.subject_id] = {
+                  fat: mark[`fat${selectedFAT}`] || 0,
+                  assignments: mark.assignments || Array(assignmentCount).fill(0),
+                };
+              });
+            });
+
+            setStudents(mappedStudents);
+            setSubjects(mappedSubjects);
+            setMarks(initialMarks);
+            setLoading(false);
+          } catch (refreshError) {
+            console.warn(`[${new Date().toISOString()}] InternalMarks.tsx: Refresh failed, redirecting to /login`);
+            toast.error('Session expired. Please log in again.');
+            localStorage.removeItem('auth');
+            localStorage.removeItem('token');
+            navigate('/login', { replace: true });
+          }
+        } else {
+          toast.error('Failed to fetch data');
+          setLoading(false);
+        }
       }
     };
     fetchData();
-  }, [selectedFAT, assignmentCount]);
+  }, [selectedFAT, assignmentCount, navigate]);
 
   const handleFATMarkChange = (studentId: string, subjectId: string, value: string) => {
     const numValue = value === '' ? 0 : Math.min(100, Math.max(0, Number(value)));
@@ -171,7 +259,7 @@ export const InternalMarks = () => {
         return;
       }
 
-      console.log('Sending internal marks payload:', JSON.stringify({ marks: marksData }, null, 2));
+      console.log(`[${new Date().toISOString()}] InternalMarks.tsx: Sending internal marks payload:`, marksData);
       await axios.post('http://localhost:8000/api/internal-marks', { marks: marksData });
       toast.success('Marks saved successfully!');
       setSaved(true);
@@ -180,6 +268,7 @@ export const InternalMarks = () => {
       // Refresh marks
       const timestamp = new Date().getTime();
       const marksRes = await axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`);
+      console.log(`[${new Date().toISOString()}] InternalMarks.tsx: Refreshed /api/internal-marks response:`, marksRes.data);
       const initialMarks: MarksData = {};
       marksRes.data.forEach((student: any) => {
         student.internal_marks.forEach((mark: InternalMark) => {
@@ -192,8 +281,53 @@ export const InternalMarks = () => {
       });
       setMarks(initialMarks);
     } catch (error: any) {
-      console.error('Save marks error:', JSON.stringify(error.response?.data || error.message, null, 2));
-      toast.error('Failed to save marks');
+      console.error(`[${new Date().toISOString()}] InternalMarks.tsx: Save marks error:`, error.response?.data || error.message);
+      if (error.response?.status === 401) {
+        console.warn(`[${new Date().toISOString()}] InternalMarks.tsx: 401 Unauthorized on save, attempting token refresh`);
+        try {
+          await refreshToken();
+          const marksData = Object.entries(marks)
+            .flatMap(([studentId, subjects]) =>
+              Object.entries(subjects)
+                .filter(([subjectId]) => subjectId === selectedSubject)
+                .map(([subjectId, data]) => ({
+                  student_id: studentId,
+                  subject_id: subjectId,
+                  fat_number: selectedFAT,
+                  fat: parseFloat(data.fat.toFixed(1)),
+                  assignments: data.assignments.map((a: number) => parseFloat(a.toFixed(1))),
+                  academic_year: '2024-2025',
+                }))
+            )
+            .filter((mark) => mark.fat >= 0 && mark.assignments.every((a) => a >= 0));
+          await axios.post('http://localhost:8000/api/internal-marks', { marks: marksData });
+          toast.success('Marks saved successfully!');
+          setSaved(true);
+          setTimeout(() => setSaved(false), 2000);
+
+          const timestamp = new Date().getTime();
+          const marksRes = await axios.get(`http://localhost:8000/api/internal-marks?t=${timestamp}`);
+          const initialMarks: MarksData = {};
+          marksRes.data.forEach((student: any) => {
+            student.internal_marks.forEach((mark: InternalMark) => {
+              initialMarks[mark.student_id] = initialMarks[mark.student_id] || {};
+              initialMarks[mark.student_id][mark.subject_id] = {
+                fat: mark[`fat${selectedFAT}`] || 0,
+                assignments: mark.assignments || Array(assignmentCount).fill(0),
+              };
+            });
+          });
+          setMarks(initialMarks);
+        } catch (refreshError) {
+          console.warn(`[${new Date().toISOString()}] InternalMarks.tsx: Refresh failed, redirecting to /login`);
+          toast.error('Session expired. Please log in again.');
+          localStorage.removeItem('auth');
+          localStorage.removeItem('token');
+          navigate('/login', { replace: true });
+        }
+      } else {
+        toast.error('Failed to save marks');
+      }
     } finally {
       setSaving(false);
     }

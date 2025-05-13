@@ -12,11 +12,15 @@ import os
 load_dotenv()
 
 # JWT configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key")
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
+# Validate SECRET_KEY
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY not set in environment variables")
+
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # MongoDB connection settings
@@ -71,11 +75,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: TeacherDB = 
     logger.debug(f"Decoding token: {token[:20]}...")
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        logger.debug(f"JWT payload: {payload}")
         role: str = payload.get("role")
         id: str = payload.get("id")
         if role is None or id is None:
             logger.warning(f"Invalid token: missing role or id")
-            raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(status_code=401, detail="Invalid token: missing role or id")
         if role == "admin":
             return {"role": "admin", "id": "admin", "fullName": "Admin"}
         elif role == "teacher":
@@ -94,6 +99,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: TeacherDB = 
         else:
             logger.warning(f"Invalid role: {role}")
             raise HTTPException(status_code=401, detail="Invalid role")
-    except jwt.PyJWTError as e:
-        logger.error(f"JWT decode error: {str(e)}")
+    except jwt.ExpiredSignatureError:
+        logger.error("JWT token has expired")
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError as e:
+        logger.error(f"Invalid JWT token: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error in get_current_user: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")

@@ -1,12 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import ValidationError
 from typing import Optional, Dict, Any, List
 from database import StudentDB, DepartmentDB
 from AddStudentModel import AddStudentModel
-from dependencies import get_student_db, get_department_db
+from dependencies import get_student_db, get_department_db, get_current_user
 from bson import ObjectId
 import logging
-import json
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -19,8 +18,13 @@ async def create_student(
     student: AddStudentModel,
     file: Optional[UploadFile] = File(None),
     student_db: StudentDB = Depends(get_student_db),
-    department_db: DepartmentDB = Depends(get_department_db)
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can create students")
+    
     try:
         dept_id = ObjectId(student.department)
         dept = await department_db.collection.find_one({'_id': dept_id})
@@ -44,8 +48,13 @@ async def create_student(
 @router.get("/students", response_model=List[Dict[str, Any]])
 async def get_students(
     student_db: StudentDB = Depends(get_student_db),
-    department_db: DepartmentDB = Depends(get_department_db)
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can view students")
+    
     try:
         students = []
         all_depts = {str(d['_id']): d async for d in department_db.collection.find()}
@@ -66,7 +75,16 @@ async def get_students(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/students/{id}", response_model=Dict[str, Any])
-async def get_student(id: str, student_db: StudentDB = Depends(get_student_db), department_db: DepartmentDB = Depends(get_department_db)):
+async def get_student(
+    id: str,
+    student_db: StudentDB = Depends(get_student_db),
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can view student details")
+    
     try:
         student = await student_db.get_student(id)
         if not student:
@@ -93,8 +111,13 @@ async def update_student(
     id: str,
     student: AddStudentModel,
     student_db: StudentDB = Depends(get_student_db),
-    department_db: DepartmentDB = Depends(get_department_db)
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can update students")
+    
     try:
         logger.debug(f"Querying department with ID: {student.department}")
         dept = await department_db.collection.find_one({'_id': ObjectId(student.department)})
@@ -123,7 +146,15 @@ async def update_student(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/students/{id}", response_model=Dict[str, Any])
-async def delete_student(id: str, student_db: StudentDB = Depends(get_student_db)):
+async def delete_student(
+    id: str,
+    student_db: StudentDB = Depends(get_student_db),
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can delete students")
+    
     try:
         result = await student_db.delete_student(id)
         logger.info(f"Student deleted via API: {id}")
@@ -140,8 +171,13 @@ async def assign_course(
     student_id: str,
     course_id: str,
     student_db: StudentDB = Depends(get_student_db),
-    department_db: DepartmentDB = Depends(get_department_db)
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can assign courses")
+    
     try:
         result = await student_db.assign_course(student_id, course_id)
         dept_id = result.get("department")
@@ -165,8 +201,13 @@ async def remove_course(
     student_id: str,
     course_id: str,
     student_db: StudentDB = Depends(get_student_db),
-    department_db: DepartmentDB = Depends(get_department_db)
+    department_db: DepartmentDB = Depends(get_department_db),
+    current_user: dict = Depends(get_current_user)
 ):
+    if current_user["role"] != "teacher":
+        logger.error(f"Unauthorized access by user: {current_user['id']}, role: {current_user['role']}")
+        raise HTTPException(status_code=403, detail="Only teachers can remove courses")
+    
     try:
         result = await student_db.remove_course(student_id, course_id)
         dept_id = result.get("department")
